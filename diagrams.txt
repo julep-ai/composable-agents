@@ -1,0 +1,231 @@
+<!-- AIDEV-NOTE: architecture-diagrams; visual representations of Julep v2 system components -->
+graph TB
+    subgraph "Agent A"
+        A_MEM[Memory<br/>System]
+        A_MCP[MCP<br/>Server]
+        A_A2A[A2A<br/>Client]
+    end
+
+    subgraph "Agent B"
+        B_MEM[Memory<br/>System]
+        B_MCP[MCP<br/>Client]
+        B_A2A[A2A<br/>Server]
+    end
+
+    subgraph "Agent C"
+        C_MEM[Memory<br/>System]
+        C_BOTH[MCP + A2A]
+    end
+
+    subgraph "Shared Infrastructure"
+        REG[Agent<br/>Registry]
+        QUEUE[Message<br/>Queue]
+        DISC[Discovery<br/>Service]
+    end
+
+    A_MCP <-->|Tools| QUEUE
+    B_MCP <-->|Tools| QUEUE
+
+    A_A2A <-->|Tasks| QUEUE
+    B_A2A <-->|Tasks| QUEUE
+    C_BOTH <-->|Both| QUEUE
+
+    A_A2A --> REG
+    B_A2A --> REG
+    C_BOTH --> REG
+
+    REG --> DISC
+
+    A_MEM -.->|Share Context| B_MEM
+    B_MEM -.->|Share Context| C_MEM
+
+---
+
+<!-- AIDEV-NOTE: protocol-flow; sequence diagram showing MCP and A2A communication patterns -->
+sequenceDiagram
+    participant Agent1 as Agent 1
+    participant MCP1 as MCP Server
+    participant PGMQ as pgmq Queue
+    participant MCP2 as MCP Client
+    participant Agent2 as Agent 2
+    participant A2A as A2A Protocol
+    
+    Note over Agent1,Agent2: MCP Communication
+    Agent1->>MCP1: Request Tool
+    MCP1->>PGMQ: Queue Message
+    PGMQ->>MCP2: Deliver Message
+    MCP2->>Agent2: Execute Tool
+    Agent2-->>Agent1: Return Result
+    
+    Note over Agent1,Agent2: A2A Communication
+    Agent1->>A2A: Discover Agents
+    A2A-->>Agent1: AgentCard Registry
+    Agent1->>A2A: Create Task
+    A2A->>PGMQ: Queue Task
+    PGMQ->>Agent2: Deliver Task
+    Agent2->>A2A: Update Task Status
+    A2A-->>Agent1: Task Complete
+
+---
+
+<!-- AIDEV-NOTE: memory-architecture; cognitive memory system structure and relationships -->
+
+graph TB
+    subgraph "Memory Types"
+        EP[Episodic Memory<br/>Experiences & Context]
+        SM[Semantic Memory<br/>Facts & Knowledge]
+        IM[Implicit Memory<br/>Patterns & Beliefs]
+        PM[Prospective Memory<br/>Goals & Obligations]
+    end
+    
+    subgraph "Storage Layer"
+        VEC[(pgvector<br/>Embeddings)]
+        JSON[(JSONB<br/>Structured Data)]
+        GRAPH[(Graph<br/>Relationships)]
+    end
+    
+    subgraph "Processing"
+        EMB[Embedding<br/>Generation]
+        CONS[Memory<br/>Consolidation]
+        RET[Retrieval<br/>& Search]
+    end
+    
+    EP --> VEC
+    EP --> JSON
+    SM --> GRAPH
+    SM --> VEC
+    IM --> JSON
+    PM --> JSON
+    
+    EMB --> VEC
+    CONS --> EP
+    CONS --> SM
+    CONS --> IM
+    
+    RET --> VEC
+    RET --> GRAPH
+    
+    CN[ConceptNet<br/>Integration] --> SM
+
+---
+
+<!-- AIDEV-NOTE: system-architecture; postgresql-centric technology stack diagram -->
+
+        graph TB
+    subgraph "PostgreSQL Core"
+        DB[(PostgreSQL)]
+        PGV[pgvector]
+        PGM[pgmq]
+        PGA[pgai]
+        PGJ[pg_jsonschema]
+    end
+    
+    subgraph "API Layer"
+        HASURA[Hasura V2<br/>GraphQL/REST]
+        FASTAPI[FastAPI<br/>Custom Logic]
+    end
+    
+    subgraph "Orchestration"
+        DBOS[DBOS<br/>Workflows]
+    end
+    
+    subgraph "Schema Generation"
+        TS[TypeSpec<br/>Definitions]
+    end
+    
+    subgraph "Protocols"
+        MCP[MCP Server/Client]
+        A2A[A2A Protocol]
+    end
+    
+    TS -->|Generates| DB
+    TS -->|Generates| FASTAPI
+    TS -->|Generates| MCP
+    
+    DB --> PGV
+    DB --> PGM
+    DB --> PGA
+    DB --> PGJ
+    
+    HASURA --> DB
+    FASTAPI --> DB
+    DBOS --> DB
+    
+    MCP --> PGM
+    A2A --> PGM
+    
+    Client[Client Apps] --> HASURA
+    Client --> FASTAPI        
+
+---
+
+
+flowchart LR
+    subgraph "TypeSpec Definitions"
+        TS[TypeSpec<br/>Models]
+    end
+    
+    subgraph "Generated Artifacts"
+        SQL[PostgreSQL<br/>Schema]
+        API[REST API<br/>Contracts]
+        GQL[GraphQL<br/>Schema]
+        PY[Python<br/>Client SDK]
+        VAL[JSON Schema<br/>Validators]
+    end
+    
+    subgraph "Runtime Components"
+        DB[(Database)]
+        FAST[FastAPI]
+        HAS[Hasura]
+        APP[Python App]
+    end
+    
+    TS -->|tsp compile| SQL
+    TS -->|tsp compile| API
+    TS -->|tsp compile| GQL
+    TS -->|tsp compile| PY
+    TS -->|tsp compile| VAL
+    
+    SQL --> DB
+    API --> FAST
+    GQL --> HAS
+    PY --> APP
+    VAL --> DB
+    
+    style TS fill:#f9f,stroke:#333,stroke-width:4px
+
+---
+
+
+gantt
+    title Julep V2 Development Timeline
+    dateFormat  YYYY-MM-DD
+    section Week 1
+    Environment Setup           :done, w1-1, 2024-01-01, 2d
+    PostgreSQL Extensions      :done, w1-2, after w1-1, 2d
+    TypeSpec Schema           :done, w1-3, after w1-1, 3d
+    
+    section Week 2
+    Basic Agent CRUD          :active, w2-1, 2024-01-08, 2d
+    Simple Memory Storage     :active, w2-2, after w2-1, 2d
+    Auth & API Foundation     :active, w2-3, after w2-1, 3d
+    
+    section Week 3
+    MCP Implementation        :w3-1, 2024-01-15, 3d
+    A2A Protocol             :w3-2, after w3-1, 2d
+    Memory Consolidation     :w3-3, 2024-01-17, 3d
+    
+    section Week 4
+    Hasura Integration       :w4-1, 2024-01-22, 2d
+    Protocol Routing         :w4-2, after w4-1, 2d
+    DBOS Workflows          :w4-3, after w4-1, 3d
+    
+    section Week 5
+    Multi-Agent Patterns     :w5-1, 2024-01-29, 2d
+    Performance Tuning       :w5-2, after w5-1, 2d
+    Advanced Memory         :w5-3, after w5-1, 3d
+    
+    section Week 6
+    Integration Testing      :w6-1, 2024-02-05, 2d
+    Documentation           :w6-2, after w6-1, 2d
+    Demo Preparation        :w6-3, after w6-1, 3d
