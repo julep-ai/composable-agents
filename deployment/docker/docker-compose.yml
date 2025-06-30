@@ -1,0 +1,81 @@
+version: '3.8'
+
+# AIDEV-NOTE: docker-compose; development environment with all dependencies
+# - PostgreSQL 15 with pgvector 0.8.0, pgmq, pgai extensions
+# - Hasura GraphQL engine for instant GraphQL APIs
+# - Redis for caching (optional, not required for MVP)
+# - Monitoring stack with Prometheus and Grafana
+
+services:
+  postgres:
+    image: ankane/pgvector:v0.8.0
+    command: |
+      postgres 
+      -c shared_preload_libraries='pg_stat_statements,pgmq,vector'
+      -c shared_buffers=4GB
+      -c effective_cache_size=12GB
+      -c maintenance_work_mem=2GB
+      -c max_parallel_maintenance_workers=4
+      -c max_connections=200
+      -c log_statement=all
+      -c log_duration=on
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: julep
+      # AIDEV-NOTE: pgvector-optimization; settings for HNSW performance
+      # - maintenance_work_mem=2GB speeds up index builds
+      # - max_parallel_maintenance_workers=4 for concurrent index creation
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    # AIDEV-NOTE: memory-requirements; increase for production workloads
+    shm_size: '2gb'  # Required for parallel HNSW index builds
+
+  hasura:
+    image: hasura/graphql-engine:v2.36.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      HASURA_GRAPHQL_DATABASE_URL: postgres://postgres:postgres@postgres:5432/julep
+      HASURA_GRAPHQL_ENABLE_CONSOLE: "true"
+      HASURA_GRAPHQL_DEV_MODE: "true"
+      HASURA_GRAPHQL_ADMIN_SECRET: "your-hasura-secret"
+      # AIDEV-NOTE: hasura-config; expose PostgreSQL functions as GraphQL
+      HASURA_GRAPHQL_ENABLE_POSTGRES_FUNCTIONS: "true"
+
+  # AIDEV-TODO: app-service; FastAPI application with proper env vars
+  # app:
+  #   build: .
+  #   depends_on:
+  #     - postgres
+  #     - hasura
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/julep
+  #     HASURA_ENDPOINT: http://hasura:8080
+  #   volumes:
+  #     - ./agents_api:/app/agents_api
+
+  # AIDEV-TODO: monitoring; add Prometheus and Grafana services
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./prometheus.yml:/etc/prometheus/prometheus.yml
+  #     - prometheus_data:/prometheus
+
+volumes:
+  postgres_data:
+  prometheus_data:

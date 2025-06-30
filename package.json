@@ -1,0 +1,31 @@
+{
+  "name": "julep-v2",
+  "version": "2.0.0-alpha",
+  "description": "Julep V2 TypeSpec definitions and tooling",
+  "private": true,
+  "scripts": {
+    "typespec:compile": "tsp compile typespec",
+    "typespec:watch": "tsp compile typespec --watch",
+    "typespec:format": "tsp format typespec/**/*.tsp",
+    "generate": "npm run typespec:compile"
+  },
+  "devDependencies": {
+    "@typespec/compiler": "^1.1.0",
+    "@typespec/openapi": "latest",
+    "@typespec/openapi3": "latest",
+    "@typespec/rest": "latest",
+    "@typespec/http": "latest",
+    "@typespec/json-schema": "latest",
+    "@typespec/versioning": "latest"
+  },
+  "//": [
+    "AIDEV-NOTE: typespec-deps; TypeSpec 1.1.0 with emitters",
+    "- @typespec/compiler: Core TypeSpec compiler",
+    "- @typespec/openapi3: Generate OpenAPI 3.0 specs",
+    "- @typespec/rest: REST API decorators and patterns",
+    "- @typespec/json-schema: Generate JSON Schema",
+    "Additional emitters available:",
+    "- @typespec/protobuf: Generate Protocol Buffers",
+    "- @typespec/xml: XML support for APIs"
+  ]
+}

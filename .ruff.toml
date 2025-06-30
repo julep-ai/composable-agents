@@ -1,0 +1,13 @@
+# Ruff configuration for Julep V2
+
+# AIDEV-TODO: lint-rules; configure Python linting rules
+# AIDEV-TODO: format-rules; consistent code formatting
+# AIDEV-TODO: import-sorting; organize imports properly
+
+select = ["E", "F", "I", "N", "W"]
+ignore = []
+line-length = 88
+target-version = "py311"
+
+[per-file-ignores]
+"__init__.py" = ["F401"]

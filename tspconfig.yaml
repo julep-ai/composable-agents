@@ -1,0 +1,34 @@
+# TypeSpec configuration file
+# AIDEV-NOTE: tspconfig; TypeSpec 1.1.0 project configuration
+
+emit:
+  - "@typespec/openapi3"
+  - "@typespec/json-schema"
+  # AIDEV-TODO: postgres-emitter; add custom PostgreSQL schema emitter
+  # - "./typespec-postgres-emitter"
+
+options:
+  "@typespec/openapi3":
+    # AIDEV-NOTE: openapi-output; generates OpenAPI 3.0 spec
+    output-dir: "{project-root}/generated/openapi"
+    file-name: "julep-v2-api.yaml"
+    
+  "@typespec/json-schema":
+    # AIDEV-NOTE: json-schema-output; generates JSON Schema for validation
+    output-dir: "{project-root}/generated/json-schema"
+    
+  # AIDEV-TODO: client-generation; add client SDK generation
+  # "@typespec/python":
+  #   output-dir: "{project-root}/sdk/python/julep/generated"
+  #   package-name: "julep.models"
+    
+# AIDEV-NOTE: linter-rules; TypeSpec best practices
+linter:
+  extends: ["@typespec/recommended"]
+  rules:
+    "@typespec/naming/interface": "error"
+    "@typespec/naming/model": "error"
+    "@typespec/naming/operation": "error"
+
+# Entry point for TypeSpec compilation
+main: typespec/main.tsp

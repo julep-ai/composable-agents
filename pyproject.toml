@@ -1,0 +1,33 @@
+[tool.poetry]
+name = "julep-v2"
+version = "2.0.0-alpha"
+description = "Protocol-native co-agents with cognitive memory architecture"
+authors = ["Julep AI Team"]
+
+# AIDEV-TODO: python-version; specify Python 3.11+ requirement
+# AIDEV-TODO: core-dependencies; FastAPI, SQLAlchemy, asyncpg, DBOS
+# AIDEV-TODO: dev-dependencies; pytest, black, ruff, mypy
+# AIDEV-TODO: optional-dependencies; monitoring, profiling tools
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.100.0"
+sqlalchemy = "^2.0.0"
+asyncpg = "^0.28.0"
+
+[tool.poetry.dev-dependencies]
+pytest = "^7.4.0"
+black = "^23.0.0"
+ruff = "^0.1.0"
+mypy = "^1.5.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+# AIDEV-NOTE: typespec-setup; install globally or via npx
+# npm install -g @typespec/compiler@1.1.0
+# Additional TypeSpec emitters:
+# npm install @typespec/openapi
+# npm install @typespec/json-schema
+# npm install @typespec/protobuf
