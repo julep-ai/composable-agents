@@ -23,29 +23,18 @@ ALTER SYSTEM SET effective_cache_size = '12GB';
 ALTER SYSTEM SET hnsw.iterative_scan = on;
 ALTER SYSTEM SET ivfflat.iterative_scan = on;
 
--- AIDEV-TODO: schema-creation; create schemas for logical separation
+-- AIDEV-NOTE: schema-creation; create schemas for logical separation
 CREATE SCHEMA IF NOT EXISTS agents;
 CREATE SCHEMA IF NOT EXISTS memory;
 CREATE SCHEMA IF NOT EXISTS protocols;
 CREATE SCHEMA IF NOT EXISTS workflows;
 
--- AIDEV-TODO: base-tables; create core tables with proper indexes
--- Example agent table with vector embedding
-CREATE TABLE IF NOT EXISTS agents.agents (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name VARCHAR(255) NOT NULL,
-    type VARCHAR(50) NOT NULL CHECK (type IN ('conversational', 'task-oriented', 'research')),
-    embedding vector(1536),  -- OpenAI embedding dimension
-    metadata JSONB DEFAULT '{}',
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
+-- AIDEV-NOTE: run-migrations; execute all migration files
+-- Migrations are now located in src/database/migrations/
+\i /app/src/database/migrations/001_initial_schema.sql
+\i /app/src/database/migrations/002_memory_system.sql
+\i /app/src/database/migrations/003_protocols.sql
+\i /app/src/database/migrations/004_workflows.sql
+\i /app/src/database/migrations/005_functions.sql
 
--- AIDEV-NOTE: hnsw-index; create after data load for better performance
--- CREATE INDEX agents_embedding_idx ON agents.agents 
--- USING hnsw (embedding vector_l2_ops) 
--- WITH (m = 16, ef_construction = 64);
-
--- AIDEV-TODO: memory-tables; create tables for 4 memory types
--- AIDEV-TODO: protocol-tables; MCP and A2A message storage
--- AIDEV-TODO: workflow-tables; DBOS workflow state management
+-- AIDEV-NOTE: database-initialized; Julep V2 database schema complete
