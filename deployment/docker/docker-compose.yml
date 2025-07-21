@@ -12,31 +12,33 @@ services:
     command: |
       postgres 
       -c shared_preload_libraries='pg_stat_statements,pgmq,vector'
-      -c shared_buffers=4GB
-      -c effective_cache_size=12GB
-      -c maintenance_work_mem=2GB
-      -c max_parallel_maintenance_workers=4
-      -c max_connections=200
-      -c log_statement=all
-      -c log_duration=on
+      -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-4GB}
+      -c effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-12GB}
+      -c maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-2GB}
+      -c max_parallel_maintenance_workers=${POSTGRES_MAX_PARALLEL_WORKERS:-4}
+      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-200}
+      -c log_statement=${POSTGRES_LOG_STATEMENT:-all}
+      -c log_duration=${POSTGRES_LOG_DURATION:-on}
     environment:
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: julep
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
       # AIDEV-NOTE: pgvector-optimization; settings for HNSW performance
-      # - maintenance_work_mem=2GB speeds up index builds
-      # - max_parallel_maintenance_workers=4 for concurrent index creation
+      # - maintenance_work_mem speeds up index builds
+      # - max_parallel_maintenance_workers for concurrent index creation
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ../../src:/app/src:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 5s
       timeout: 5s
       retries: 5
     # AIDEV-NOTE: memory-requirements; increase for production workloads
-    shm_size: '2gb'  # Required for parallel HNSW index builds
+    shm_size: ${POSTGRES_SHM_SIZE:-2gb}  # Required for parallel HNSW index builds
 
   hasura:
     image: hasura/graphql-engine:v2.36.0
@@ -44,38 +46,96 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      - "${HASURA_PORT:-8080}:8080"
     environment:
-      HASURA_GRAPHQL_DATABASE_URL: postgres://postgres:postgres@postgres:5432/julep
-      HASURA_GRAPHQL_ENABLE_CONSOLE: "true"
-      HASURA_GRAPHQL_DEV_MODE: "true"
-      HASURA_GRAPHQL_ADMIN_SECRET: "your-hasura-secret"
+      HASURA_GRAPHQL_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      HASURA_GRAPHQL_ENABLE_CONSOLE: ${HASURA_ENABLE_CONSOLE:-true}
+      HASURA_GRAPHQL_DEV_MODE: ${HASURA_DEV_MODE:-true}
+      HASURA_GRAPHQL_ADMIN_SECRET: ${HASURA_ADMIN_SECRET}
       # AIDEV-NOTE: hasura-config; expose PostgreSQL functions as GraphQL
       HASURA_GRAPHQL_ENABLE_POSTGRES_FUNCTIONS: "true"
+      HASURA_GRAPHQL_UNAUTHORIZED_ROLE: ${HASURA_UNAUTHORIZED_ROLE:-anonymous}
+      HASURA_GRAPHQL_JWT_SECRET: ${HASURA_JWT_SECRET:-}
 
-  # AIDEV-TODO: app-service; FastAPI application with proper env vars
-  # app:
-  #   build: .
-  #   depends_on:
-  #     - postgres
-  #     - hasura
-  #   ports:
-  #     - "8000:8000"
-  #   environment:
-  #     DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/julep
-  #     HASURA_ENDPOINT: http://hasura:8080
-  #   volumes:
-  #     - ./agents_api:/app/agents_api
+  app:
+    build: 
+      context: ../..
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      hasura:
+        condition: service_started
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      # Database
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      
+      # Hasura
+      HASURA_ENDPOINT: http://hasura:8080
+      HASURA_ADMIN_SECRET: ${HASURA_ADMIN_SECRET}
+      
+      # OpenAI / LLM Configuration
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      
+      # Application
+      APP_ENV: ${APP_ENV:-development}
+      APP_SECRET_KEY: ${APP_SECRET_KEY}
+      
+      # JWT Configuration
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      
+      # Redis (if enabled)
+      REDIS_URL: ${REDIS_URL:-}
+      
+      # Monitoring
+      ENABLE_METRICS: ${ENABLE_METRICS:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    volumes:
+      - ../../src:/app/src
+      - ../../pyproject.toml:/app/pyproject.toml
+    restart: unless-stopped
 
-  # AIDEV-TODO: monitoring; add Prometheus and Grafana services
-  # prometheus:
-  #   image: prom/prometheus:latest
-  #   ports:
-  #     - "9090:9090"
-  #   volumes:
-  #     - ./prometheus.yml:/etc/prometheus/prometheus.yml
-  #     - prometheus_data:/prometheus
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    profiles:
+      - full
+
+  # Monitoring stack (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    depends_on:
+      - prometheus
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: false
+    volumes:
+      - grafana_data:/var/lib/grafana
+    profiles:
+      - monitoring
 
 volumes:
   postgres_data:
   prometheus_data:
+  redis_data:
+  grafana_data:
