@@ -1,16 +1,19 @@
-# agents_api Directory Guide
+# src Directory Guide
 
-<!-- AIDEV-NOTE: agents-api-overview; core API implementation following database-centric architecture -->
-This directory contains the core Julep V2 API implementation using FastAPI and PostgreSQL as the single source of truth.
+<!-- AIDEV-NOTE: src-overview; core implementation following database-centric architecture -->
+This directory contains the core Julep V2 implementation using FastAPI and PostgreSQL as the single source of truth, without ORM dependencies.
 
 ## Directory Structure
 
 - **api/**: FastAPI routes and endpoint handlers
-- **models/**: TypeSpec-generated SQLAlchemy models
 - **memory/**: Cognitive memory system (episodic, semantic, implicit, prospective)
 - **protocols/**: MCP and A2A protocol implementations
 - **workflows/**: DBOS-based durable workflow orchestration
-- **utils/**: Shared utilities and helpers
+- **agents/**: Agent management and lifecycle
+- **database/**: Database module with connection management and migrations
+  - **connection.py**: Direct psycopg connection management (no ORM)
+  - **migrations/**: SQL migration files (001-005)
+- **database.py**: Backward compatibility re-export
 
 ## Key Principles
 
@@ -34,5 +37,13 @@ This directory contains the core Julep V2 API implementation using FastAPI and P
 - API response time: <100ms
 - Memory search: <50ms for 10k entries
 - Concurrent operations: 1000+ agents
+
+## Database Migrations
+
+<!-- AIDEV-NOTE: migration-location; migrations now live with application code -->
+Database migrations are located in `src/database/migrations/`:
+- Numbered sequentially (001, 002, etc.)
+- Run automatically during Docker startup
+- See `database/migrations/README.md` for migration guidelines
 
 <!-- AIDEV-TODO: add-examples; include code examples for common patterns -->

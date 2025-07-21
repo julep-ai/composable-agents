@@ -6,8 +6,8 @@ Four memory types: episodic, semantic, implicit, prospective
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-import asyncpg
-from pgvector.asyncpg import register_vector
+import psycopg
+from pgvector.psycopg import register_vector
 
 # AIDEV-NOTE: pgvector-0.8.0; November 2024 release with major improvements
 # - Iterative scanning with hnsw.iterative_scan for better filtering
