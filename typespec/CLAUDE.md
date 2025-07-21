@@ -32,7 +32,7 @@ This directory contains TypeSpec definitions that generate PostgreSQL schemas, A
 1. Define or update TypeSpec models
 2. Run generation: `npm run generate`
 3. Generated code appears in:
-   - `agents_api/models/` (SQLAlchemy)
+   - `deployment/docker/migrations/` (SQL schemas)
    - `sdk/python/julep/` (Python SDK)
    - `sdk/typescript/` (TypeScript SDK)
 
