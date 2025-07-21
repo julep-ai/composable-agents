@@ -35,7 +35,7 @@ namespace JulepV2;
  * 
  * AIDEV-NOTE: model-generation; this generates:
  * - PostgreSQL table with proper constraints
- * - SQLAlchemy async models
+ * - SQL schema migrations
  * - FastAPI Pydantic models
  * - TypeScript interfaces for SDK
  * - OpenAPI documentation

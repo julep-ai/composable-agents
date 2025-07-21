@@ -166,9 +166,7 @@ toml
     python = "^3.11"
     fastapi = "^0.109.0"
     uvicorn = {extras = ["standard"], version = "^0.25.0"}
-    sqlalchemy = {extras = ["asyncio"], version = "^2.0.25"}
-    asyncpg = "^0.29.0"
-    alembic = "^1.13.1"
+    psycopg = {extras = ["binary", "pool"], version = "^3.1.0"}
     pydantic = "^2.5.3"
     pydantic-settings = "^2.1.0"
     dbos = "^0.1.0"
@@ -2221,8 +2219,7 @@ python
     from typing import List, Optional, Dict, Any
     from datetime import datetime, timedelta
     import numpy as np
-    from sqlalchemy import select, and_, func
-    from sqlalchemy.ext.asyncio import AsyncSession
+    import psycopg
     
     from src.database import get_db
     from src.memory import EpisodicMemory, MemoryType
@@ -2230,8 +2227,8 @@ python
     from src.utils.emotions import analyze_emotional_content
     
     class EpisodicMemoryManager:
-        def __init__(self, db_session: AsyncSession):
-            self.db = db_session
+        def __init__(self, db_connection: psycopg.AsyncConnection):
+            self.db = db_connection
         
         async def store_episode(
             self,
@@ -2600,7 +2597,7 @@ python
     from typing import List, Optional, Dict, Any, Tuple
     from datetime import datetime
     import numpy as np
-    from sqlalchemy.ext.asyncio import AsyncSession
+    import psycopg
     import networkx as nx
     
     from src.database import get_db
@@ -2609,8 +2606,8 @@ python
     from src.utils.knowledge import extract_concepts, query_conceptnet
     
     class SemanticMemoryManager:
-        def __init__(self, db_session: AsyncSession):
-            self.db = db_session
+        def __init__(self, db_connection: psycopg.AsyncConnection):
+            self.db = db_connection
             self.concept_graph = nx.DiGraph()
         
         async def store_fact(
@@ -3120,15 +3117,15 @@ python
     from datetime import datetime, timedelta
     from collections import defaultdict
     import numpy as np
-    from sqlalchemy.ext.asyncio import AsyncSession
+    import psycopg
     
     from src.database import get_db
     from src.memory import ImplicitMemory, MemoryType
     from src.utils.patterns import extract_behavioral_patterns
     
     class ImplicitMemoryManager:
-        def __init__(self, db_session: AsyncSession):
-            self.db = db_session
+        def __init__(self, db_connection: psycopg.AsyncConnection):
+            self.db = db_connection
             self.pattern_cache = defaultdict(list)
         
         async def record_behavior(
@@ -3585,7 +3582,7 @@ python
     from datetime import datetime, timedelta
     from enum import Enum
     import networkx as nx
-    from sqlalchemy.ext.asyncio import AsyncSession
+    import psycopg
     
     from src.database import get_db
     from src.memory import ProspectiveMemory, MemoryType
@@ -3599,8 +3596,8 @@ python
         CANCELLED = "cancelled"
     
     class ProspectiveMemoryManager:
-        def __init__(self, db_session: AsyncSession):
-            self.db = db_session
+        def __init__(self, db_connection: psycopg.AsyncConnection):
+            self.db = db_connection
             self.goal_graph = nx.DiGraph()
         
         async def create_goal(
@@ -4301,7 +4298,7 @@ python
     import uuid
     from datetime import datetime
     
-    from sqlalchemy.ext.asyncio import AsyncSession
+    import psycopg
     from src.database import get_db
     
     class TransportType(str, Enum):
@@ -4339,12 +4336,12 @@ python
             name: str,
             agent_id: str,
             transport: TransportType,
-            db_session: AsyncSession
+            db_connection: psycopg.AsyncConnection
         ):
             self.name = name
             self.agent_id = agent_id
             self.transport = transport
-            self.db = db_session
+            self.db = db_connection
             self.server_id = str(uuid.uuid4())
             
             self.tools: Dict[str, MCPTool] = {}
@@ -4910,17 +4907,17 @@ python
     import uuid
     from datetime import datetime
     
-    from sqlalchemy.ext.asyncio import AsyncSession
+    import psycopg
     from src.database import get_db
     
     class MCPClient:
         def __init__(
             self,
             agent_id: str,
-            db_session: AsyncSession
+            db_connection: psycopg.AsyncConnection
         ):
             self.agent_id = agent_id
-            self.db = db_session
+            self.db = db_connection
             self._servers: Dict[str, Dict[str, Any]] = {}
             self._http_client = httpx.AsyncClient()
             
@@ -5461,7 +5458,7 @@ python
 
     from typing import Dict, Any, List, Optional, Callable
     import asyncio
-    from sqlalchemy.ext.asyncio import AsyncSession
+    import psycopg
     
     from src.protocols.mcp.server import MCPServer
     from src.protocols.mcp.client import MCPClient
@@ -5470,11 +5467,11 @@ python
     class MCPManager:
         """Manages MCP servers and clients for an agent."""
         
-        def __init__(self, agent_id: str, db_session: AsyncSession):
+        def __init__(self, agent_id: str, db_connection: psycopg.AsyncConnection):
             self.agent_id = agent_id
-            self.db = db_session
+            self.db = db_connection
             self.servers: Dict[str, MCPServer] = {}
-            self.client = MCPClient(agent_id, db_session)
+            self.client = MCPClient(agent_id, db_connection)
         
         async def initialize(self):
             """Initialize MCP manager from agent configuration."""
@@ -5930,7 +5927,7 @@ python
     import uuid
     from datetime import datetime
     
-    from sqlalchemy.ext.asyncio import AsyncSession
+    import psycopg
     from src.database import get_db
     
     class TaskStatus(str, Enum):
@@ -5974,10 +5971,10 @@ python
         def __init__(
             self,
             agent_id: str,
-            db_session: AsyncSession
+            db_connection: psycopg.AsyncConnection
         ):
             self.agent_id = agent_id
-            self.db = db_session
+            self.db = db_connection
             self._task_handlers: Dict[str, Callable] = {}
             self._running_tasks: Dict[str, asyncio.Task] = {}
             self._agent_card: Optional[A2AAgentCard] = None
@@ -6841,7 +6838,7 @@ python
     from enum import Enum
     
     from dbos import DBOS, workflow, step, scheduled
-    from sqlalchemy.ext.asyncio import AsyncSession
+    import psycopg
     
     from src.database import get_db
     
@@ -6871,11 +6868,11 @@ python
             self,
             name: str,
             agent_id: str,
-            db_session: AsyncSession
+            db_connection: psycopg.AsyncConnection
         ):
             self.name = name
             self.agent_id = agent_id
-            self.db = db_session
+            self.db = db_connection
             self._context: Optional[WorkflowContext] = None
         
         @property
@@ -8448,93 +8445,59 @@ python
 
     from typing import AsyncGenerator, Optional
     from contextlib import asynccontextmanager
-    from sqlalchemy.ext.asyncio import (
-        AsyncSession, 
-        AsyncEngine,
-        create_async_engine,
-        async_sessionmaker
-    )
-    from sqlalchemy.pool import NullPool, QueuePool
-    from sqlalchemy.orm import declarative_base
+    import psycopg
+    from psycopg_pool import AsyncConnectionPool
+    from psycopg.rows import dict_row
     
     from src.config import settings
     
-    # Create base class for SQLAlchemy models
-    Base = declarative_base()
+    # AIDEV-NOTE: db-connection; using psycopg3 with connection pooling for direct SQL queries
     
-    # Global engine instance
-    _engine: Optional[AsyncEngine] = None
-    _session_factory: Optional[async_sessionmaker] = None
+    # Global connection pool instance
+    _pool: Optional[AsyncConnectionPool] = None
     
-    def get_engine() -> AsyncEngine:
-        """Get or create the database engine."""
-        global _engine
+    async def get_pool() -> AsyncConnectionPool:
+        """Get or create the database connection pool."""
+        global _pool
         
-        if _engine is None:
-            # Use asyncpg for better performance
-            database_url = settings.database_url.replace(
-                "postgresql://", "postgresql+asyncpg://"
-            )
-            
-            _engine = create_async_engine(
-                database_url,
-                poolclass=QueuePool,
-                pool_size=settings.database_pool_size,
-                max_overflow=settings.database_max_overflow,
-                pool_pre_ping=True,  # Verify connections
-                echo=settings.environment == "development",
-                future=True
+        if _pool is None:
+            _pool = AsyncConnectionPool(
+                conninfo=settings.database_url,
+                min_size=5,
+                max_size=settings.database_pool_size,
+                timeout=30,
+                max_waiting=settings.database_max_overflow,
+                open=True,
             )
         
-        return _engine
+        return _pool
     
-    def get_session_factory() -> async_sessionmaker:
-        """Get or create the session factory."""
-        global _session_factory
-        
-        if _session_factory is None:
-            _session_factory = async_sessionmaker(
-                bind=get_engine(),
-                class_=AsyncSession,
-                expire_on_commit=False,
-                autocommit=False,
-                autoflush=False
-            )
-        
-        return _session_factory
-    
-    async def get_db() -> AsyncGenerator[AsyncSession, None]:
-        """Dependency to get database session."""
-        async with get_session_factory()() as session:
-            try:
-                yield session
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
+    async def get_db() -> AsyncGenerator[psycopg.AsyncConnection, None]:
+        """Dependency to get database connection."""
+        pool = await get_pool()
+        async with pool.connection() as conn:
+            conn.row_factory = dict_row
+            async with conn.transaction():
+                yield conn
     
     @asynccontextmanager
-    async def get_db_context() -> AsyncGenerator[AsyncSession, None]:
-        """Context manager for database session."""
-        async with get_session_factory()() as session:
-            try:
-                yield session
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
+    async def get_db_context() -> AsyncGenerator[psycopg.AsyncConnection, None]:
+        """Context manager for database connection."""
+        pool = await get_pool()
+        async with pool.connection() as conn:
+            conn.row_factory = dict_row
+            async with conn.transaction():
+                yield conn
     
     async def init_db():
         """Initialize database (create tables, etc)."""
-        engine = get_engine()
+        pool = await get_pool()
         
-        async with engine.begin() as conn:
-            # In production, use Alembic migrations instead
-            # await conn.run_sync(Base.metadata.create_all)
+        async with pool.connection() as conn:
+            # Execute initialization SQL directly
+            with open('deployment/docker/init.sql', 'r') as f:
+                init_sql = f.read()
+            await conn.execute(init_sql)
             
             # Verify extensions are installed
             result = await conn.execute(
@@ -9014,8 +8977,7 @@ python
     from uuid import UUID
     
     from fastapi import APIRouter, Depends, HTTPException, status, Query
-    from sqlalchemy.ext.asyncio import AsyncSession
-    from sqlalchemy import select, update, delete
+    import psycopg
     
     from src.database import get_db
     from src.api.schemas.agents import (
@@ -9035,7 +8997,7 @@ python
         limit: int = Query(20, ge=1, le=100),
         agent_type: Optional[str] = None,
         is_active: Optional[bool] = None,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """List all agents with optional filtering."""
         
@@ -9057,7 +9019,7 @@ python
     @router.post("/", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
     async def create_agent(
         agent: AgentCreate,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Create a new agent."""
         
@@ -9086,7 +9048,7 @@ python
     @router.get("/{agent_id}", response_model=AgentResponse)
     async def get_agent(
         agent_id: UUID,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Get agent by ID."""
         
@@ -9104,7 +9066,7 @@ python
     async def update_agent(
         agent_id: UUID,
         agent_update: AgentUpdate,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Update agent configuration."""
         
@@ -9124,7 +9086,7 @@ python
     @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_agent(
         agent_id: UUID,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Delete an agent."""
         
@@ -9143,7 +9105,7 @@ python
     async def create_session(
         agent_id: UUID,
         session: SessionCreate,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Create a new conversation session."""
         
@@ -9191,7 +9153,7 @@ python
         agent_id: UUID,
         session_id: UUID,
         message: MessageCreate,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Send a message in a conversation session."""
         
@@ -9253,7 +9215,7 @@ python
         agent_id: UUID,
         session_id: UUID,
         limit: int = Query(20, ge=1, le=100),
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Get conversation history."""
         
@@ -9291,7 +9253,7 @@ python
         agent_id: UUID,
         tool_name: str,
         tool_input: Dict[str, Any],
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Execute an MCP tool."""
         
@@ -9316,7 +9278,7 @@ python
     @router.get("/{agent_id}/stats")
     async def get_agent_stats(
         agent_id: UUID,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Get agent statistics."""
         
@@ -9390,7 +9352,7 @@ python
     from uuid import UUID
     
     from fastapi import APIRouter, Depends, HTTPException, status, Query
-    from sqlalchemy.ext.asyncio import AsyncSession
+    import psycopg
     
     from src.database import get_db
     from src.api.schemas.memory import (
@@ -9409,7 +9371,7 @@ python
     @router.post("/store", response_model=MemoryResponse)
     async def store_memory(
         memory: MemoryCreate,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Store a new memory."""
         
@@ -9464,7 +9426,7 @@ python
     @router.post("/search", response_model=List[MemoryResponse])
     async def search_agent_memories(
         search: MemorySearch,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Search memories using vector similarity."""
         
@@ -9490,7 +9452,7 @@ python
     @router.get("/{memory_id}", response_model=MemoryResponse)
     async def get_memory(
         memory_id: UUID,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Get a specific memory by ID."""
         
@@ -9529,7 +9491,7 @@ python
     @router.post("/consolidate", response_model=ConsolidationResponse)
     async def consolidate_memories(
         request: ConsolidationRequest,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Run memory consolidation for an agent."""
         
@@ -9560,7 +9522,7 @@ python
         time_range: Optional[int] = Query(None, description="Days to look back"),
         emotional_filter: Optional[str] = Query(None, enum=["positive", "negative", "neutral"]),
         limit: int = Query(20, ge=1, le=100),
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Get episodic memories with filtering."""
         
@@ -9590,7 +9552,7 @@ python
     async def get_knowledge_graph(
         agent_id: UUID,
         max_depth: int = Query(3, ge=1, le=5),
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Get agent's knowledge graph."""
         
@@ -9637,7 +9599,7 @@ python
         agent_id: UUID,
         status: Optional[str] = Query(None, enum=["active", "completed", "failed", "deferred"]),
         include_subgoals: bool = Query(True),
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Get agent's goals."""
         
@@ -9671,7 +9633,7 @@ python
         goal_id: UUID,
         progress: float = Query(..., ge=0, le=1),
         checkpoint: Optional[str] = None,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Update goal progress."""
         
@@ -9697,7 +9659,7 @@ python
         agent_id: UUID,
         days: int = Query(30, ge=7, le=365),
         min_frequency: int = Query(10, ge=1),
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Extract agent's habitual patterns."""
         
@@ -9723,7 +9685,7 @@ python
         relationship_type: str,
         strength: float = Query(1.0, ge=0, le=1),
         metadata: Optional[Dict[str, Any]] = None,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Create relationship between memories."""
         
@@ -9779,7 +9741,7 @@ python
     from uuid import UUID
     
     from fastapi import APIRouter, Depends, HTTPException, status, Query
-    from sqlalchemy.ext.asyncio import AsyncSession
+    import psycopg
     
     from src.database import get_db
     from src.api.schemas.protocols import (
@@ -9796,7 +9758,7 @@ python
     @router.post("/mcp/servers")
     async def create_mcp_server(
         server: MCPServerCreate,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Create and start an MCP server."""
         
@@ -9825,7 +9787,7 @@ python
     async def list_mcp_tools(
         agent_id: UUID,
         server_name: Optional[str] = None,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """List available MCP tools."""
         
@@ -9844,7 +9806,7 @@ python
         agent_id: UUID,
         tool_name: str,
         tool_input: Dict[str, Any],
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Execute an MCP tool."""
         
@@ -9869,7 +9831,7 @@ python
     @router.get("/mcp/resources", response_model=List[MCPResourceResponse])
     async def list_mcp_resources(
         agent_id: UUID,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """List available MCP resources."""
         
@@ -9903,7 +9865,7 @@ python
     async def get_mcp_resource(
         agent_id: UUID,
         uri: str,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Get MCP resource content."""
         
@@ -9930,7 +9892,7 @@ python
     @router.post("/a2a/tasks", response_model=A2ATaskResponse)
     async def create_a2a_task(
         task: A2ATaskCreate,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Create a new A2A task."""
         
@@ -9956,7 +9918,7 @@ python
     @router.get("/a2a/tasks/{task_id}", response_model=A2ATaskResponse)
     async def get_a2a_task(
         task_id: UUID,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Get A2A task status."""
         
@@ -9988,7 +9950,7 @@ python
         agent_id: UUID,
         progress: float = Query(..., ge=0, le=1),
         message: Optional[str] = None,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Update task progress (for remote agent)."""
         
@@ -10023,7 +9985,7 @@ python
         agent_id: UUID,
         output: Dict[str, Any],
         artifacts: Optional[List[Dict[str, Any]]] = None,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Complete an A2A task."""
         
@@ -10046,7 +10008,7 @@ python
         agent_id: UUID,
         content: str,
         parts: Optional[List[Dict[str, Any]]] = None,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Send a message about a task."""
         
@@ -10059,7 +10021,7 @@ python
     @router.get("/a2a/agents", response_model=List[A2AAgentCardResponse])
     async def discover_a2a_agents(
         capabilities: Optional[List[str]] = Query(None),
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Discover available A2A agents."""
         
@@ -10073,7 +10035,7 @@ python
     @router.get("/a2a/agents/{agent_id}/card")
     async def get_agent_card(
         agent_id: UUID,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Get an agent's A2A card."""
         
@@ -10106,7 +10068,7 @@ python
     async def add_agent_capability(
         agent_id: UUID,
         capability: str,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Add a capability to an agent."""
         
@@ -10144,7 +10106,7 @@ python
     from uuid import UUID
     
     from fastapi import APIRouter, Depends, HTTPException, status, Query
-    from sqlalchemy.ext.asyncio import AsyncSession
+    import psycopg
     
     from src.database import get_db
     from src.api.schemas.workflows import (
@@ -10159,7 +10121,7 @@ python
     @router.get("/definitions")
     async def list_workflow_definitions(
         is_active: Optional[bool] = None,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """List available workflow definitions."""
         
@@ -10196,7 +10158,7 @@ python
     async def execute_workflow(
         workflow_name: str,
         execution: WorkflowExecutionRequest,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Execute a workflow."""
         
@@ -10247,7 +10209,7 @@ python
     @router.get("/instances/{instance_id}", response_model=WorkflowInstanceResponse)
     async def get_workflow_instance(
         instance_id: UUID,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Get workflow instance details."""
         
@@ -10309,7 +10271,7 @@ python
         workflow_name: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = Query(20, ge=1, le=100),
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Get workflow execution history for an agent."""
         
@@ -10354,7 +10316,7 @@ python
     @router.post("/instances/{instance_id}/cancel")
     async def cancel_workflow(
         instance_id: UUID,
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Cancel a running workflow."""
         
@@ -10384,7 +10346,7 @@ python
     @router.get("/stats")
     async def get_workflow_stats(
         days: int = Query(7, ge=1, le=365),
-        db: AsyncSession = Depends(get_db)
+        db: psycopg.AsyncConnection = Depends(get_db)
     ):
         """Get workflow execution statistics."""
         
@@ -10458,8 +10420,7 @@ python
     from datetime import datetime
     
     from fastapi import APIRouter, Depends, status
-    from sqlalchemy.ext.asyncio import AsyncSession
-    from sqlalchemy import text
+    import psycopg
     
     from src.database import get_db, check_db_health
     from src.config import settings
@@ -10492,7 +10453,7 @@ python
         
         try:
             # Check database connectivity
-            result = await db.execute(text("SELECT 1"))
+            result = await db.execute("SELECT 1")
             checks["database"] = result.scalar() == 1
             
             # Check required extensions
@@ -10535,25 +10496,25 @@ python
             }, status.HTTP_503_SERVICE_UNAVAILABLE
     
     @router.get("/metrics")
-    async def get_metrics(db: AsyncSession = Depends(get_db)):
+    async def get_metrics(db: psycopg.AsyncConnection = Depends(get_db)):
         """Get application metrics."""
         
         metrics = {}
         
         try:
             # Database metrics
-            db_metrics = await db.execute(
-                text("""
+            cursor = await db.execute(
+                """
                 SELECT 
                     (SELECT COUNT(*) FROM agents.agents WHERE is_active) as active_agents,
                     (SELECT COUNT(*) FROM agents.sessions WHERE is_active) as active_sessions,
                     (SELECT COUNT(*) FROM memory.memories) as total_memories,
                     (SELECT COUNT(*) FROM protocols.a2a_tasks WHERE status = 'running') as running_tasks,
                     (SELECT pg_database_size(current_database())) as database_size_bytes
-                """)
+                """
             )
             
-            db_data = db_metrics.fetchone()
+            db_data = await cursor.fetchone()
             metrics["database"] = {
                 "active_agents": db_data[0],
                 "active_sessions": db_data[1],
@@ -12115,7 +12076,7 @@ yaml
 
 **Problem:** Application fails to connect to PostgreSQL
 
-    sqlalchemy.exc.OperationalError: could not connect to server
+    psycopg.OperationalError: could not connect to server
 
 **Solutions:**
 
@@ -12315,7 +12276,7 @@ python
 
     # Enable query logging for debugging
     import logging
-    logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
+    logging.getLogger('psycopg').setLevel(logging.INFO)
 
 **Memory Profiling:**
 
@@ -12409,25 +12370,23 @@ python
 python
 
     # Optimized connection pool settings
-    from sqlalchemy.pool import NullPool, QueuePool
+    from psycopg_pool import AsyncConnectionPool
     
     # For high-concurrency scenarios
-    engine = create_async_engine(
-        DATABASE_URL,
-        poolclass=QueuePool,
-        pool_size=50,
-        max_overflow=100,
-        pool_timeout=30,
-        pool_recycle=3600,
-        pool_pre_ping=True,
-        echo_pool=True  # Debug pool usage
+    pool = AsyncConnectionPool(
+        conninfo=DATABASE_URL,
+        min_size=10,
+        max_size=50,
+        timeout=30,
+        max_waiting=100,
+        max_idle=3600,
+        open=True
     )
     
     # For serverless/lambda
-    engine = create_async_engine(
-        DATABASE_URL,
-        poolclass=NullPool  # No pooling
-    )
+    # Use single connections without pooling
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        # Execute queries
 
 ### Memory System Optimizations
 

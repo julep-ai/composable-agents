@@ -111,8 +111,7 @@ sql
 **Python dependencies focus on async performance**:
 
 -   FastAPI for high-performance async REST APIs
--   SQLAlchemy with async support for ORM operations
--   asyncpg for direct PostgreSQL access when performance matters
+-   psycopg with async support for direct PostgreSQL access
 -   DBOS Python client for workflow orchestration
 
 The development environment uses Docker Compose for consistency:

@@ -34,7 +34,7 @@ source .venv/bin/activate
 | Component | Technology | Purpose |
 |-----------|------------|---------|
 | Database | PostgreSQL 15+ | Single source of truth |
-| API | FastAPI + SQLAlchemy | Async REST endpoints |
+| API | FastAPI + psycopg | Async REST endpoints with direct SQL |
 | Schema | TypeSpec | Code generation |
 | Workflows | DBOS | Durable execution |
 | GraphQL | Hasura | Auto-generated from DB |

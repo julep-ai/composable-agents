@@ -5,15 +5,14 @@ description = "Protocol-native co-agents with cognitive memory architecture"
 authors = ["Julep AI Team"]
 
 # AIDEV-TODO: python-version; specify Python 3.11+ requirement
-# AIDEV-TODO: core-dependencies; FastAPI, SQLAlchemy, asyncpg, DBOS
+# AIDEV-TODO: core-dependencies; FastAPI, psycopg[binary,pool], DBOS
 # AIDEV-TODO: dev-dependencies; pytest, black, ruff, mypy
 # AIDEV-TODO: optional-dependencies; monitoring, profiling tools
 
 [tool.poetry.dependencies]
 python = "^3.11"
 fastapi = "^0.100.0"
-sqlalchemy = "^2.0.0"
-asyncpg = "^0.28.0"
+psycopg = {extras = ["binary", "pool"], version = "^3.2.0"}
 
 [tool.poetry.dev-dependencies]
 pytest = "^7.4.0"
