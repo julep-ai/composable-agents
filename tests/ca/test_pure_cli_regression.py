@@ -56,3 +56,26 @@ def test_run_executes_pures_no_unknown_pure(pure_module: Path) -> None:
     assert outcome.error is None, f"run failed: {outcome.error}"
     # The pure actually executed: its output ('seen') survives into the value.
     assert isinstance(outcome.value, dict) and "seen" in outcome.value
+
+
+import subprocess
+import sys
+
+
+def test_cli_lint_and_run_end_to_end(pure_module: Path) -> None:
+    base = [sys.executable, "-m", "composable_agents.ca.cli"]
+    lint = subprocess.run(
+        base + ["lint", "triage"], cwd=pure_module, capture_output=True, text=True
+    )
+    assert lint.returncode == 0, lint.stdout + lint.stderr
+    assert "UNKNOWN_PURE" not in (lint.stdout + lint.stderr)
+
+    run = subprocess.run(
+        base + ["run", "triage", "--input", '"TICKET-42"'],
+        cwd=pure_module,
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "unknown pure" not in (run.stdout + run.stderr).lower()
+    assert "output:" in run.stdout
