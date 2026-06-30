@@ -67,8 +67,20 @@ Out = TypeVar("Out")
 _JSON = (str, int, float, bool, type(None), list, dict)
 _RESERVED_STEP_KWARGS = {"name", "retries", "retry_interval_s", "backoff_rate", "timeout_s"}
 _CONTROL_HELPERS = {"cond", "switch", "each", "reschedule"}
+# Names that are top-level authoring helpers, never methods on a Handle/FlowDef.
+# Used to turn `flow.each(...)` / `handle.switch(...)` into a teaching DefineError.
+_TOP_LEVEL_HELPERS = _CONTROL_HELPERS | {"par", "seq", "map_n"}
 _RESERVED_ENV_NAME_RE = re.compile(r"__.*__")
 _CTX_STACK: list["_BuildContext"] = []
+
+
+def _top_level_helper_error(owner_label: str, name: str, source: Optional[SourceSpan]) -> "DefineError":
+    return DefineError(
+        f"{name} is a top-level helper, not a method"
+        f"{_source_suffix(source)}; call {name}(...) and pass {owner_label} as an argument "
+        f"(e.g. each(body, items) / switch(selector, subject, cases=...)), "
+        f"not {owner_label}.{name}(...)."
+    )
 
 
 class DefineError(dag.GraphDefinitionError):
@@ -171,7 +183,13 @@ class _SourceMap:
                         "assign the step to one name or pass name=... to the step"
                     )
             for call in [node for node in ast.walk(stmt) if isinstance(node, ast.Call)]:
-                if self._call_uses_handle(call, handle_names) and not self._is_allowed_call(call):
+                if self._call_uses_handle(call, handle_names):
+                    top_level_method = self._top_level_method_helper(call, handle_names)
+                    if top_level_method is not None:
+                        owner_label, helper_name = top_level_method
+                        raise _top_level_helper_error(owner_label, helper_name, self._span(call))
+                    if self._is_allowed_call(call):
+                        continue
                     name = self._call_name(call)
                     raise DefineError(
                         "unregistered callable "
@@ -199,6 +217,21 @@ class _SourceMap:
         if target is None:
             return False
         return _is_control_helper(target) or _is_tool(target) or _is_pure(target) or isinstance(target, FlowDef)
+
+    def _top_level_method_helper(self, call: ast.Call, handle_names: set[str]) -> Optional[tuple[str, str]]:
+        if not isinstance(call.func, ast.Attribute):
+            return None
+        helper_name = call.func.attr
+        if helper_name not in _TOP_LEVEL_HELPERS:
+            return None
+        owner_expr = call.func.value
+        owner_label = ast.unparse(owner_expr)
+        if isinstance(owner_expr, ast.Name) and owner_expr.id in handle_names:
+            return owner_label, helper_name
+        owner = self._resolve_expr(owner_expr)
+        if isinstance(owner, FlowDef):
+            return owner_label, helper_name
+        return None
 
     def _resolve_call_target(self, call: ast.Call) -> Any:
         return self._resolve_expr(call.func)
@@ -362,6 +395,8 @@ class Handle:
         return Handle(output, ctx.graph, span)
 
     def __getattr__(self, name: str) -> object:
+        if name in _TOP_LEVEL_HELPERS:
+            raise _top_level_helper_error(self.label, name, self.source)
         raise AttributeError(
             f"Handle attribute access is not runtime data{_source_suffix(self.source)}; "
             f"got {self.label}.{name}. Use {self.label}[{name!r}] for std.pluck."
@@ -511,6 +546,12 @@ class FlowDef(FlowLike[Any, Any]):
                 raise TypeError(f"flow {self.name!r} got multiple values for {key!r}")
             supplied[key] = value
         return supplied
+
+    def __getattr__(self, name: str) -> object:
+        # __getattr__ only fires for genuinely-missing attributes.
+        if name in _TOP_LEVEL_HELPERS:
+            raise _top_level_helper_error(self.name, name, getattr(self, "source", None))
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
 
     def to_ir(self) -> Node:
         if len(self.param_names) != 1:

@@ -502,6 +502,39 @@ def test_handle_bool_iter_and_attribute_errors_are_actionable() -> None:
     assert not hasattr(handle, "foo")
 
 
+def test_flowdef_dot_each_gives_top_level_hint() -> None:
+    from composable_agents import flow, tool
+    from composable_agents.define import DefineError
+
+    @tool(effect="read", idempotent=True)
+    def lk(t: str) -> dict:
+        return {"x": 1}
+
+    @flow
+    def body(item: dict) -> dict:
+        return lk("x") | item if False else item
+
+    with pytest.raises(DefineError, match=r"each is a top-level helper.*each\(body, items"):
+        @flow
+        def outer(items: list) -> object:
+            return body.each(items)        # method-style fan-out -> teaching error
+
+
+def test_handle_dot_switch_gives_top_level_hint() -> None:
+    from composable_agents import flow, tool
+    from composable_agents.define import DefineError
+
+    @tool(effect="read", idempotent=True)
+    def lk(t: str) -> dict:
+        return {"x": 1}
+
+    with pytest.raises(DefineError, match=r"switch is a top-level helper"):
+        @flow
+        def outer(t: str) -> object:
+            hit = lk(t)
+            return hit.switch(cases={})    # method-style branch on a Handle -> teaching error
+
+
 def test_handle_equality_and_inequality_raise_cond_teaching_error() -> None:
     with pytest.raises(
         DefineError,
