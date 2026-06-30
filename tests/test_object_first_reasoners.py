@@ -62,3 +62,30 @@ def test_agent_accepts_reasoner_object() -> None:
     agent = Agent(reasoner=r)                 # object, not a string, no prior registration
     # the agent resolved the reasoner by name under the hood
     assert agent is not None
+
+
+def test_register_reasoner_not_public() -> None:
+    import composable_agents
+
+    assert not hasattr(composable_agents, "register_reasoner")
+    assert "register_reasoner" not in composable_agents.__all__
+
+
+def test_think_accepts_object_at_authoring_time() -> None:
+    from composable_agents import Reasoner, flow, pure, think, tool
+
+    @tool(effect="read", idempotent=True)
+    def lk(t: str) -> dict:
+        return {"q": "b"}
+
+    @pure("ws5_p4")
+    def pp(h: dict) -> dict:
+        return {"q": h["q"]}
+
+    r = Reasoner(name="ws5_think_obj", model="anthropic:claude-haiku-4-5-20251001", reply={"o": "str"})
+
+    @flow
+    def f(t: str) -> dict:
+        return pp(lk(t)) | think(r, pp(lk(t)))
+
+    assert f is not None  # @flow define-time accepted think(r, ...)

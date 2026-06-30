@@ -176,7 +176,6 @@ from .dotctx import (
     dotctx_flow as dotctx_flow,
     get_reasoner as get_reasoner,
     load_dotctx as load_dotctx,
-    register_reasoner as register_reasoner,
 )
 
 # --- purity registry ------------------------------------------------------- #
@@ -309,7 +308,7 @@ _BASE_EXPORTS = [
     "deploy", "Deployment", "snapshot_from_listings",
     "Agent", "AGENT_REPLY_SCHEMA", "Tool", "tool", "snapshot_from_tools",
     # dotctx
-    "Reasoner", "register_reasoner", "get_reasoner", "load_dotctx", "dotctx_flow",
+    "Reasoner", "get_reasoner", "load_dotctx", "dotctx_flow",
     "reasoner_to_flow", "reasoner_from_settings",
     # purity
     "pure", "register_pure", "is_registered", "get_pure", "diff_pure_hashes",

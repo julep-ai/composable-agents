@@ -192,10 +192,6 @@ class Reasoner:
 _REASONERS: dict[str, Reasoner] = DEFAULT_REGISTRY.reasoners
 
 
-def register_reasoner(reasoner: Reasoner) -> Reasoner:
-    return DEFAULT_REGISTRY.register_reasoner(reasoner)
-
-
 def get_reasoner(name: str) -> Reasoner:
     return DEFAULT_REGISTRY.get_reasoner(name)
 
@@ -264,7 +260,7 @@ def reasoner_from_settings(settings: dict[str, Any], *, name: Optional[str] = No
         user_render=settings.get("user_render") or settings.get("userRender"),
         max_tokens=settings.get("max_tokens") or settings.get("maxTokens"),
     )
-    return register_reasoner(reasoner)
+    return DEFAULT_REGISTRY.register_reasoner(reasoner)
 
 
 # Rich-layout markers: any of these turns the package over to dotctx_rich

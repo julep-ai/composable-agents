@@ -29,7 +29,7 @@ from .agent_loop import AgentConfig, drive_agent_loop
 from .capabilities import Budget, CapabilityManifest, ToolGrant
 from .contracts import ToolContract
 from .deploy import Deployment, deploy
-from .dotctx import Reasoner, register_reasoner
+from .dotctx import Reasoner
 from .dsl import app, call, native
 from .errors import ValidationError
 from .execution.cma import CMAAgentEnv, CMAClient, manifest_to_custom_tools
@@ -504,7 +504,7 @@ class Agent(FlowLike[Any, Any]):
             if isinstance(cap, Flow):
                 register_flow(ref, cap)
 
-        register_reasoner(
+        DEFAULT_REGISTRY.register_reasoner(
             Reasoner(
                 name=resolved_name,
                 model=reasoner,
