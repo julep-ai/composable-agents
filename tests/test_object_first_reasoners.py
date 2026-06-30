@@ -94,10 +94,11 @@ def test_think_accepts_object_at_authoring_time() -> None:
 
 def test_no_public_register_reasoner_or_reply_schema_left() -> None:
     # register_reasoner must not appear as a public/import symbol; reply_schema must
-    # not appear as a constructor kwarg anywhere in package, examples, or docs.
+    # not appear as a constructor kwarg anywhere in package, examples, docs, or the
+    # user-facing README/CONTRIBUTING (the PyPI landing page included).
     out = subprocess.run(
         ["grep", "-rn", "register_reasoner\\|reply_schema=",
-         "composable_agents", "examples", "docs-site/content"],
+         "composable_agents", "examples", "docs-site/content", "README.md", "CONTRIBUTING.md"],
         capture_output=True, text=True,
     ).stdout
     # The only allowed hit is the internal registry method definition.
