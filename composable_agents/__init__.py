@@ -199,6 +199,7 @@ from .define import (
     flow as flow,
     reschedule as reschedule,
     switch as switch,
+    switch_on as switch_on,
     think as think,
 )
 from .typed import as_flow as as_flow
@@ -284,7 +285,7 @@ _BASE_EXPORTS = [
     "HUMAN_GATE_TOOL", "SLEEP_TOOL", "RECV_TOOL", "EMIT_TOOL",
     # dsl
     "call", "native", "mcp", "think", "reasoner_from_ctx", "ident", "arr", "sub",
-    "seq", "par", "fanout", "each", "alt", "cond", "switch", "reschedule",
+    "seq", "par", "fanout", "each", "alt", "cond", "switch", "switch_on", "reschedule",
     "iter_up_to", "stage", "app",
     "Contract",
     # derived

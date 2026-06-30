@@ -66,7 +66,7 @@ In = TypeVar("In")
 Out = TypeVar("Out")
 _JSON = (str, int, float, bool, type(None), list, dict)
 _RESERVED_STEP_KWARGS = {"name", "retries", "retry_interval_s", "backoff_rate", "timeout_s"}
-_CONTROL_HELPERS = {"cond", "switch", "each", "reschedule"}
+_CONTROL_HELPERS = {"cond", "switch", "switch_on", "each", "reschedule"}
 # Names that are top-level authoring helpers, never methods on a Handle/FlowDef.
 # Used to turn `flow.each(...)` / `handle.switch(...)` into a teaching DefineError.
 _TOP_LEVEL_HELPERS = _CONTROL_HELPERS | {"par", "seq", "map_n"}
@@ -728,6 +728,34 @@ def switch(
         branch_subject=handle.label,
     )
     return Handle(output, ctx.graph, span)
+
+
+def switch_on(
+    subject: Handle,
+    *,
+    key: str,
+    cases: dict[str, "FlowDef | BoundFlow"],
+    default: "FlowDef | BoundFlow | None" = None,
+) -> Handle:
+    """Branch on the value of one field of ``subject`` — declarative sugar over ``switch``.
+
+    Derives a deterministic selector pure ``str(subject[key])`` and registers it by
+    source (so it is source-pinned like any ``@pure``), then delegates to ``switch``.
+    Same ``key`` → same registered selector (idempotent); the determinism contract holds
+    without you hand-writing and registering a predicate. ``cases`` keys are matched by
+    string equality against the field value.
+    """
+    from .purity import is_registered, register_pure_with_source
+
+    selector_name = f"switch_on.{key}"
+    if not is_registered(selector_name):
+        source = f"def _switch_on_selector(value):\n    return str(value[{key!r}])\n"
+
+        def _selector(value: Any) -> str:
+            return str(value[key])
+
+        register_pure_with_source(selector_name, _selector, source)
+    return switch(selector_name, subject, cases=cases, default=default)
 
 
 def each(
@@ -1520,7 +1548,7 @@ def _is_pure(value: Any) -> bool:
 
 
 def _is_control_helper(value: Any) -> bool:
-    return any(value is helper for helper in (think, cond, switch, each, reschedule))
+    return any(value is helper for helper in (think, cond, switch, switch_on, each, reschedule))
 
 
 def _site_matches_ref(site: _CallSite, ref: str) -> bool:
@@ -1554,6 +1582,7 @@ __all__ = [
     "flow",
     "reschedule",
     "switch",
+    "switch_on",
     "think",
     "apply_if_authoring",
 ]
