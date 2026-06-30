@@ -307,6 +307,25 @@ def test_in_flow_multi_param_subflow_single_handle_raises_define_error() -> None
             return y
 
 
+def test_pure_called_with_two_handles_gives_fix_line() -> None:
+    from composable_agents import flow, pure, tool
+    from composable_agents.define import DefineError
+
+    @tool(effect="read", idempotent=True)
+    def lk(t: str) -> dict:
+        return {"a": 1, "b": 2}
+
+    @pure("ws3_two_arg")
+    def combine(a: dict, b: dict) -> dict:  # author mistakenly expects two handles
+        return {**a, **b}
+
+    with pytest.raises(DefineError, match=r"one input value.*merge.*\|"):
+        @flow
+        def bad(t: str) -> dict:
+            hit = lk(t)
+            return combine(hit, hit)   # two positional handles -> should be a DefineError
+
+
 def test_chained_merge_assignment_name_lands_on_outermost_merge() -> None:
     @flow
     def chained(source: dict[str, Any]) -> dict[str, Any]:

@@ -793,7 +793,13 @@ def apply_if_authoring(fn: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -
         )
     handle = args[0]
     if len(args) > 1:
-        raise DefineError("step application accepts one Handle plus JSON keyword constants")
+        site = _call_site(_current_context(), getattr(fn, "name", getattr(fn, "__name__", type(fn).__name__)))
+        raise DefineError(
+            f"a pure/step takes one input value plus JSON keyword constants"
+            f"{_source_suffix(site.span)}; you passed {len(args)} positional handles. "
+            "fix: merge them into one record first with 'a | b' (std.merge), or reshape with a pure, "
+            "then call on the single handle."
+        )
     if _is_tool(fn):
         return _append_step(dag.StepKind.TOOL, fn.name, handle, target=fn, **kwargs)
     if _is_pure(fn):
