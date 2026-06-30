@@ -64,6 +64,13 @@ class LintResolution:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class RunResolution:
+    value: Any
+    events: list[dict[str, Any]]
+    error: str | None = None
+
+
 def lint_agent(cfg: CaConfig, name: str, *, timeout: float = 30.0) -> LintResolution:
     """Validate an agent IN the child (where pures are registered) and return diagnostics."""
     data = _invoke_child(cfg, {"name": name, "action": "lint"}, timeout=timeout)
@@ -71,6 +78,19 @@ def lint_agent(cfg: CaConfig, name: str, *, timeout: float = 30.0) -> LintResolu
         return LintResolution(diagnostics=[], error=str(data["error"]))
     raw = data.get("diagnostics", [])
     return LintResolution(diagnostics=[dict(d) for d in raw], error=None)
+
+
+def run_agent(cfg: CaConfig, name: str, value: Any, *, timeout: float = 30.0) -> RunResolution:
+    """Interpret an agent IN the child (echo env, pures live) and return value + events."""
+    data = _invoke_child(cfg, {"name": name, "action": "run", "value": value}, timeout=timeout)
+    if "error" in data and "value" not in data:
+        # transport-level failure (timeout / nonzero / parse) -> no events available
+        return RunResolution(value=None, events=[], error=str(data["error"]))
+    return RunResolution(
+        value=data.get("value"),
+        events=[dict(e) for e in data.get("events", [])],
+        error=data.get("error"),
+    )
 
 
 def resolve_agent(cfg: CaConfig, name: str, *, timeout: float = 30.0) -> ResolvedAgent:

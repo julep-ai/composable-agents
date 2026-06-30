@@ -45,3 +45,14 @@ def test_lint_resolves_pures_no_unknown_pure(pure_module: Path) -> None:
     assert "UNKNOWN_PURE" not in codes, f"pure not resolved by ca lint: {findings}"
     assert "RESOLVE" not in codes, f"resolve failed: {findings}"
     assert exit_code == 0
+
+
+def test_run_executes_pures_no_unknown_pure(pure_module: Path) -> None:
+    from composable_agents.ca.config import load_config
+    from composable_agents.ca.runner import run_agent_local
+
+    cfg = load_config(pure_module)
+    outcome = run_agent_local(cfg, "triage", "TICKET-42", run_id="t-pure")
+    assert outcome.error is None, f"run failed: {outcome.error}"
+    # The pure actually executed: its output ('seen') survives into the value.
+    assert isinstance(outcome.value, dict) and "seen" in outcome.value

@@ -215,6 +215,38 @@ def main() -> int:
         )
         return 0
 
+    if action == "run":
+        import asyncio
+
+        from composable_agents.ca._echo import build_echo_env
+        from composable_agents.execution.interpreter import interpret
+
+        result = _discover_agent(root, src, target)
+        if result.found is None:
+            _emit({"error": _not_found_error(target, result.import_errors), "events": []})
+            return 0
+        node = result.found.to_ir()
+        env, projection = build_echo_env(node)
+        try:
+            outcome = asyncio.run(interpret(node, payload.get("value"), env))
+        except Exception as exc:  # noqa: BLE001 - serialize run failure for the parent.
+            _emit(
+                {
+                    "value": None,
+                    "events": [e.to_json() for e in projection.events()],
+                    "error": str(exc),
+                }
+            )
+            return 0
+        _emit(
+            {
+                "value": outcome.value,
+                "events": [e.to_json() for e in projection.events()],
+                "error": None,
+            }
+        )
+        return 0
+
     result = _discover_agent(root, src, target)
     found = result.found
     if found is None:
