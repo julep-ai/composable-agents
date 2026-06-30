@@ -21,6 +21,7 @@ pip install composable-agents
 
 Save this as `quickstart_flow.py` and run it with `python quickstart_flow.py`.
 
+<!-- ca:doctest expect-output -->
 ```python
 from typing import TypedDict
 
@@ -75,17 +76,16 @@ print(result.value)
 print(deployment.surface_shape.value)
 ```
 
-Expected output:
-
 ```text
 {'ticket': 'Customer was charged twice.', 'queue': 'billing', 'summary': 'Use the duplicate-charge runbook.', 'reply': 'billing: Use the duplicate-charge runbook.'}
-Pipeline
+Dataflow
 ```
 
 ## How it works
 
 ### `@tool` — side-effecting callables
 
+<!-- ca:doctest skip -->
 ```python
 @tool(effect="read", idempotent=True)
 def lookup_ticket(ticket: str) -> dict[str, str]:
@@ -96,6 +96,7 @@ def lookup_ticket(ticket: str) -> dict[str, str]:
 
 ### `@pure` — deterministic functions
 
+<!-- ca:doctest skip -->
 ```python
 @pure("ticket_prompt")
 def ticket_prompt(hit: dict[str, str]) -> dict[str, str]:
@@ -106,6 +107,7 @@ A pure is a deterministic, side-effect-free function that runs on the workflow s
 
 ### `Reasoner` — named LLM steps
 
+<!-- ca:doctest skip -->
 ```python
 SUPPORT_REPLY = Reasoner(
     name="support_reply",
@@ -119,6 +121,7 @@ A `Reasoner` names an LLM configuration. Declare it as an object, call it inside
 
 ### `@flow` — the authoring surface
 
+<!-- ca:doctest skip -->
 ```python
 @flow
 def triage(ticket: str) -> dict[str, str]:
@@ -132,6 +135,7 @@ def triage(ticket: str) -> dict[str, str]:
 
 You cannot branch or iterate on a `Handle` with plain Python:
 
+<!-- ca:doctest skip -->
 ```python
 # These are define-time errors:
 if hit:          # use cond(...) instead
@@ -144,6 +148,7 @@ Use the provided control helpers — `cond(pred, subject, then=..., orelse=...)`
 
 ### `deploy(...)` — freeze and admit
 
+<!-- ca:doctest skip -->
 ```python
 deployment = deploy(triage, tools=[lookup_ticket], reasoners=[SUPPORT_REPLY])
 ```
@@ -152,6 +157,7 @@ deployment = deploy(triage, tools=[lookup_ticket], reasoners=[SUPPORT_REPLY])
 
 After deploy you can inspect the artifact:
 
+<!-- ca:doctest skip -->
 ```python
 deployment.surface_shape    # inferred shape: Pipeline, Dataflow, Branching, …
 deployment.diagnostics      # any non-blocking warnings
@@ -160,6 +166,7 @@ deployment.prod_gap_summary()  # what strict production deploy would block
 
 ### `dry_run(...)` — local execution
 
+<!-- ca:doctest skip -->
 ```python
 result = deployment.dry_run(
     "Customer was charged twice.",
@@ -174,8 +181,9 @@ print(result.value)
 
 ## What the shape tells you
 
+<!-- ca:doctest skip -->
 ```python
-print(deployment.surface_shape.value)  # "Pipeline"
+print(deployment.surface_shape.value)  # "Dataflow"
 ```
 
 Every flow has an inferred shape on the lattice `Pipeline < Dataflow < Branching < Feedback < Staged < Agent`. A `Pipeline` is fully analyzable; an `Agent` is an open-ended controller at the top. The shape bounds what static guarantees hold and is computed from structure, not declared.

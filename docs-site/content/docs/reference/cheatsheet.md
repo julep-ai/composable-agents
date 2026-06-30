@@ -47,6 +47,7 @@ Extras: `temporal` · `dbos` · `http` · `cma` · `dotctx` · `providers` · `o
 
 ## Declaring the pieces
 
+<!-- ca:doctest skip -->
 ```python
 @tool(effect="read", idempotent=True)          # effect: read | write | external | dangerous
 def lookup(ticket: str) -> dict[str, str]: ...  # schemas inferred from type hints
@@ -67,6 +68,7 @@ source hashes). [Determinism contract →](/docs/guides/authoring-flows#determin
 
 ## Compile + run a `@flow` locally
 
+<!-- ca:doctest skip -->
 ```python
 deployment = deploy(flow, tools=[...], reasoners=[SUPPORT_REPLY])   # -> Deployment; strict by default
 deployment = deploy(flow, tools=[...], mode="dev")        # warn + continue while iterating
@@ -82,6 +84,7 @@ facade `Result` below: `.value` (produced value), `.reported_cost`, `.event_id`,
 
 ## `Agent` facade (controller loop)
 
+<!-- ca:doctest skip -->
 ```python
 agent = Agent(reasoner="claude-sonnet-4-6", tools=[...], llm=controller,
               budget_cost=8.0, max_rounds=8, instructions="...", mode="dev")

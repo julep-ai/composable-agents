@@ -30,6 +30,7 @@ python -m pip install composable-agents
 
 Create `quickstart_flow.py`:
 
+<!-- ca:doctest expect-output -->
 ```python
 from typing import TypedDict
 
@@ -84,17 +85,15 @@ print(result.value)
 print(deployment.surface_shape.value)
 ```
 
+```text
+{'ticket': 'Customer was charged twice.', 'queue': 'billing', 'summary': 'Use the duplicate-charge runbook.', 'reply': 'billing: Use the duplicate-charge runbook.'}
+Dataflow
+```
+
 Run it:
 
 ```bash
 python quickstart_flow.py
-```
-
-Expected output:
-
-```text
-{'ticket': 'Customer was charged twice.', 'queue': 'billing', 'summary': 'Use the duplicate-charge runbook.', 'reply': 'billing: Use the duplicate-charge runbook.'}
-Pipeline
 ```
 
 `@flow` ran `triage(...)` once at import time with `Handle` values. The tool,
@@ -138,6 +137,7 @@ Inside `@flow`, direct calls are allowed only for registered objects:
 
 Tool, pure, and reasoner steps accept these define-time step options:
 
+<!-- ca:doctest skip -->
 ```python
 step = lookup_ticket(ticket, name="hit", retries=2, retry_interval_s=1, backoff_rate=2, timeout_s=5)
 ```
@@ -149,6 +149,7 @@ fields in the frozen IR. `name=` controls the single-assignment output name.
 Do not branch or iterate on a `Handle` with Python control flow. These are
 define-time errors:
 
+<!-- ca:doctest skip -->
 ```python
 if hit:          # use cond(...)
     ...
@@ -159,6 +160,7 @@ for item in xs:  # use each(...)
 
 Use record dataflow instead:
 
+<!-- ca:doctest skip -->
 ```python
 queue = hit["queue"]      # std.pluck
 combined = hit | answer   # std.merge; later dictionaries win
@@ -174,6 +176,7 @@ strings are `"read"`, `"write"`, `"external"`, and `"dangerous"`.
 Pures are deterministic workflow-side functions. They must not do IO, read
 clocks, or depend on mutable globals.
 
+<!-- ca:doctest skip -->
 ```python
 @pure("route.is_billing")
 def is_billing(hit: dict[str, str]) -> bool:
@@ -282,6 +285,7 @@ native host environment, then the wasm-tier run fails at import.
 Place the metadata between the `@pure(...)` decorator and `def`, so it is inside
 the captured source span:
 
+<!-- ca:doctest skip -->
 ```python
 @pure("cad.demo.extract_emails.v1")
 # /// script
@@ -348,6 +352,7 @@ Typed wrappers, `Tool` objects, and Python callables do not enter `Node.to_json(
 
 Use these inspection properties after `deploy(...)`:
 
+<!-- ca:doctest skip -->
 ```python
 deployment.flow_json
 deployment.manifest_json
@@ -367,6 +372,7 @@ iteration.
 The typed layer is an authoring wrapper over the same `Node` IR. It carries
 Python type parameters while you build, then disappears before freeze.
 
+<!-- ca:doctest skip -->
 ```python
 from composable_agents import tool
 from composable_agents.typed import Flow, as_flow, par, seq
