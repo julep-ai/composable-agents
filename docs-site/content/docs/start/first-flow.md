@@ -1,6 +1,6 @@
 ---
 title: "Your First Flow"
-description: "Write a typed @flow, register a tool, pure, and reasoner, deploy it, and run it locally with dry_run — no API key needed."
+description: "Write a typed @flow, declare a tool, pure, and reasoner, deploy it, and run it locally with dry_run — no API key needed."
 ---
 
 ## What you'll build
@@ -24,7 +24,7 @@ Save this as `quickstart_flow.py` and run it with `python quickstart_flow.py`.
 ```python
 from typing import TypedDict
 
-from composable_agents import Reasoner, deploy, flow, pure, register_reasoner, think, tool
+from composable_agents import Reasoner, deploy, flow, pure, think, tool
 
 
 class SupportReply(TypedDict):
@@ -45,13 +45,11 @@ def ticket_prompt(hit: dict[str, str]) -> dict[str, str]:
     return {"queue": hit["queue"], "context": hit["summary"]}
 
 
-register_reasoner(
-    Reasoner(
-        name="support_reply",
-        model="anthropic:claude-haiku-4-5-20251001",
-        system="Draft one concise support reply as JSON.",
-        reply=SupportReply,
-    )
+SUPPORT_REPLY = Reasoner(
+    name="support_reply",
+    model="anthropic:claude-haiku-4-5-20251001",
+    system="Draft one concise support reply as JSON.",
+    reply=SupportReply,
 )
 
 
@@ -59,7 +57,7 @@ register_reasoner(
 def triage(ticket: str) -> dict[str, str]:
     hit = lookup_ticket(ticket, retries=2, timeout_s=5)
     prompt = ticket_prompt(hit)
-    answer = think("support_reply", prompt, timeout_s=10)
+    answer = think(SUPPORT_REPLY, prompt, timeout_s=10)
     return hit | answer
 
 
@@ -67,7 +65,7 @@ def fake_support_reply(value: dict[str, str]) -> SupportReply:
     return {"reply": f"{value['queue']}: {value['context']}"}
 
 
-deployment = deploy(triage, tools=[lookup_ticket], reasoners=["support_reply"])
+deployment = deploy(triage, tools=[lookup_ticket], reasoners=[SUPPORT_REPLY])
 result = deployment.dry_run(
     "Customer was charged twice.",
     reasoners={"support_reply": fake_support_reply},
@@ -106,20 +104,18 @@ def ticket_prompt(hit: dict[str, str]) -> dict[str, str]:
 
 A pure is a deterministic, side-effect-free function that runs on the workflow side (not as a tool activity). It must not do IO, read clocks, or touch mutable globals. At deploy time its source is hashed; if the source drifts between deploy and execution the workflow refuses to run.
 
-### `register_reasoner` — named LLM steps
+### `Reasoner` — named LLM steps
 
 ```python
-register_reasoner(
-    Reasoner(
-        name="support_reply",
-        model="anthropic:claude-haiku-4-5-20251001",
-        system="Draft one concise support reply as JSON.",
-        reply=SupportReply,
-    )
+SUPPORT_REPLY = Reasoner(
+    name="support_reply",
+    model="anthropic:claude-haiku-4-5-20251001",
+    system="Draft one concise support reply as JSON.",
+    reply=SupportReply,
 )
 ```
 
-A `Reasoner` names an LLM configuration. You call it inside a flow with `think("support_reply", handle)`. The name, model, and system prompt are frozen into the deployment artifact; the actual LLM call is an activity that runs outside the control plane.
+A `Reasoner` names an LLM configuration. Declare it as an object, call it inside a flow with `think(SUPPORT_REPLY, handle)`, and include it in `deploy(..., reasoners=[SUPPORT_REPLY])`. The name, model, and system prompt are frozen into the deployment artifact; the actual LLM call is an activity that runs outside the control plane.
 
 ### `@flow` — the authoring surface
 
@@ -128,7 +124,7 @@ A `Reasoner` names an LLM configuration. You call it inside a flow with `think("
 def triage(ticket: str) -> dict[str, str]:
     hit = lookup_ticket(ticket, retries=2, timeout_s=5)
     prompt = ticket_prompt(hit)
-    answer = think("support_reply", prompt, timeout_s=10)
+    answer = think(SUPPORT_REPLY, prompt, timeout_s=10)
     return hit | answer
 ```
 
@@ -149,7 +145,7 @@ Use the provided control helpers — `cond(pred, subject, then=..., orelse=...)`
 ### `deploy(...)` — freeze and admit
 
 ```python
-deployment = deploy(triage, tools=[lookup_ticket], reasoners=["support_reply"])
+deployment = deploy(triage, tools=[lookup_ticket], reasoners=[SUPPORT_REPLY])
 ```
 
 `deploy(...)` runs four static gates in order: **freeze** (bind every tool call to a content hash), **validate** (well-formedness and schema edges), **capability enforcement** (the flow may only use granted tools and reasoners), and **race admission** (every branch of a race must be safe to duplicate). A blocking diagnostic aborts by default. Pass `mode="dev"` to get warnings instead of errors while iterating locally.
