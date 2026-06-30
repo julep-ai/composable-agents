@@ -197,6 +197,24 @@ def main() -> int:
             _emit({"error": f"{type(exc).__name__}: {exc}"})
         return 0
 
+    if action == "lint":
+        from composable_agents.validate import validate
+
+        result = _discover_agent(root, src, target)
+        if result.found is None:
+            _emit({"error": _not_found_error(target, result.import_errors)})
+            return 0
+        diagnostics = validate(result.found.to_ir())
+        _emit(
+            {
+                "diagnostics": [
+                    {"code": d.code, "severity": d.severity, "message": d.message}
+                    for d in diagnostics
+                ]
+            }
+        )
+        return 0
+
     result = _discover_agent(root, src, target)
     found = result.found
     if found is None:

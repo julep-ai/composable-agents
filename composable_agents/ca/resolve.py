@@ -32,9 +32,13 @@ def _extract_payload(stdout: str) -> dict[str, Any]:
     return data
 
 
-def resolve_agent(cfg: CaConfig, name: str, *, timeout: float = 30.0) -> ResolvedAgent:
-    """Import the user's module in a subprocess and return the agent's serialized IR."""
-    arg = json.dumps({"root": str(cfg.root), "src": cfg.src, "name": name})
+def _invoke_child(cfg: CaConfig, extra: dict[str, Any], *, timeout: float = 30.0) -> dict[str, Any]:
+    """Run the resolve child with ``{root, src, **extra}`` and return its payload dict.
+
+    On any transport-level failure returns ``{"error": "<message>"}`` so callers
+    have a single shape to branch on.
+    """
+    arg = json.dumps({"root": str(cfg.root), "src": cfg.src, **extra})
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "composable_agents.ca._resolve_child", arg],
@@ -44,14 +48,34 @@ def resolve_agent(cfg: CaConfig, name: str, *, timeout: float = 30.0) -> Resolve
             cwd=str(cfg.root),
         )
     except subprocess.TimeoutExpired:
-        return ResolvedAgent(name=name, ir={}, error=f"resolution timed out after {timeout}s")
+        return {"error": f"resolution timed out after {timeout}s"}
     if proc.returncode != 0:
-        return ResolvedAgent(name=name, ir={}, error=proc.stderr.strip() or "resolver failed")
+        return {"error": proc.stderr.strip() or "resolver failed"}
     try:
-        data = _extract_payload(proc.stdout)
+        return _extract_payload(proc.stdout)
     except (ValueError, json.JSONDecodeError) as exc:
         detail = proc.stderr.strip()
-        return ResolvedAgent(name=name, ir={}, error=f"{exc}{f': {detail}' if detail else ''}")
+        return {"error": f"{exc}{f': {detail}' if detail else ''}"}
+
+
+@dataclass(frozen=True)
+class LintResolution:
+    diagnostics: list[dict[str, str]]
+    error: str | None = None
+
+
+def lint_agent(cfg: CaConfig, name: str, *, timeout: float = 30.0) -> LintResolution:
+    """Validate an agent IN the child (where pures are registered) and return diagnostics."""
+    data = _invoke_child(cfg, {"name": name, "action": "lint"}, timeout=timeout)
+    if "error" in data:
+        return LintResolution(diagnostics=[], error=str(data["error"]))
+    raw = data.get("diagnostics", [])
+    return LintResolution(diagnostics=[dict(d) for d in raw], error=None)
+
+
+def resolve_agent(cfg: CaConfig, name: str, *, timeout: float = 30.0) -> ResolvedAgent:
+    """Import the user's module in a subprocess and return the agent's serialized IR."""
+    data = _invoke_child(cfg, {"name": name}, timeout=timeout)
     if "error" in data:
         return ResolvedAgent(name=name, ir={}, error=str(data["error"]))
     return ResolvedAgent(name=str(data["name"]), ir=data["ir"], error=None)
