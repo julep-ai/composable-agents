@@ -504,7 +504,7 @@ class Agent(FlowLike[Any, Any]):
                 name=resolved_name,
                 model=reasoner,
                 system=system,
-                reply_schema=AGENT_REPLY_SCHEMA,
+                reply=AGENT_REPLY_SCHEMA,
                 tools=tool_names,
                 is_agent=True,
             )
