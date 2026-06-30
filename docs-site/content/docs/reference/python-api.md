@@ -287,12 +287,12 @@ language.
 
 | Symbol | Signature | Parameters | Returns | Raises | Example |
 |---|---|---|---|---|---|
-| `Agent` | `Agent(reasoner: str, tools: Sequence[FlowLike | SplitCapability] = (), *, name=None, llm=None, budget_cost=None, max_rounds=24, instructions=None, mode=STRICT, langfuse_export=None)` | model slug, tool/flow/agent capabilities, local LLM seam, policy | agent facade | `ValidationError`, `TypeError` | `agent = Agent("anthropic:claude-haiku-4-5", [lookup], llm=fake)` |
+| `Agent` | `Agent(reasoner: str \| Reasoner, tools: Sequence[FlowLike | SplitCapability] = (), *, name=None, llm=None, budget_cost=None, max_rounds=24, instructions=None, mode=STRICT, langfuse_export=None)` | model slug or a `Reasoner` object (its model/system drive the controller), tool/flow/agent capabilities, local LLM seam, policy | agent facade | `ValidationError`, `TypeError` | `agent = Agent("anthropic:claude-haiku-4-5", [lookup], llm=fake)` |
 | `Agent.name` | property `str` | none | controller name | none | `agent.name` |
 | `Agent.to_ir` | `to_ir() -> Node` | none | app node | none | `agent.to_ir()` |
 | `Agent.with_tools` | `with_tools(*, add=(), remove=()) -> Agent` | add/remove capabilities | new agent | same as constructor | `agent.with_tools(add=[other_tool])` |
 | `Agent.without` | `without(*tools: FlowLike | SplitCapability | str) -> Agent` | capabilities/names | new agent | same as constructor | `agent.without("lookup")` |
-| `Agent.replace` | `replace(*, reasoner=None, budget_cost=_KEEP, max_rounds=None, instructions=_KEEP, mode=_KEEP, llm=_KEEP) -> Agent` | selected config overrides | new agent | same as constructor | `agent.replace(max_rounds=8)` |
+| `Agent.replace` | `replace(*, reasoner: str \| Reasoner \| None = None, budget_cost=_KEEP, max_rounds=None, instructions=_KEEP, mode=_KEEP, llm=_KEEP) -> Agent` | selected config overrides (a `Reasoner` object drives model/system like the constructor) | new agent | same as constructor | `agent.replace(max_rounds=8)` |
 | `Agent.arun` / `run` | `async arun(input, *, principal=None) -> Result`; `run(input, *, principal=None) -> Result` | one-shot input and optional run principal | typed run dict | `RuntimeError` if sync call inside event loop; deploy/interpreter errors | `agent.run({"task": "x"}).output` |
 | `Agent.arun_on_cma` / `run_on_cma` | `async arun_on_cma(input, *, client, environment=None) -> Result`; sync wrapper | CMA client and environment | typed run dict | `RuntimeError`, CMA/tool errors | `await agent.arun_on_cma("hi", client=cma)` |
 | `Agent.open` | `async open(*, session, backend="local", principal=None, client=None, task_queue="composable-agents", policy=None, history_threshold=None, channel_capacity=None, session_id=None, environment=None) -> SessionHandle` | session plus backend config | live handle | `ValueError`, `ValidationError`, `NotImplementedError` for Temporal sub-cap auto-wire | `await agent.open(session=chat, backend="local")` |
