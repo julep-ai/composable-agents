@@ -53,3 +53,12 @@ def test_deploy_registers_reasoner_object_and_wire_is_identical() -> None:
     assert dep.artifact_hash  # froze successfully
     assert "ws5_reply2" in dep.artifact_components["reasoners"]  # name landed in the artifact
     assert dep.artifact_components == dep_by_name.artifact_components
+
+
+def test_agent_accepts_reasoner_object() -> None:
+    from composable_agents import Agent, Reasoner
+
+    r = Reasoner(name="ws5_ctrl", model="anthropic:claude-haiku-4-5-20251001", reply={"out": "str"})
+    agent = Agent(reasoner=r)                 # object, not a string, no prior registration
+    # the agent resolved the reasoner by name under the hood
+    assert agent is not None

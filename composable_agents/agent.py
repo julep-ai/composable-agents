@@ -42,6 +42,7 @@ from .flow_registry import register_flow
 from .ir import HUMAN_GATE_TOOL, JSONSchema, Node, canonical_json, toolref_key
 from .kinds import Effect, EnforcementMode, Idempotency
 from .projection import InMemoryProjection, ProjectionEmitter, ProjectionEvent
+from .registry import DEFAULT_REGISTRY
 from .result import Result
 from .validate import Diagnostic, blocking
 
@@ -406,7 +407,7 @@ class Agent(FlowLike[Any, Any]):
 
     def __init__(
         self,
-        reasoner: str,
+        reasoner: str | Reasoner,
         tools: Sequence[FlowLike[Any, Any] | SplitCapability] = (),
         *,
         name: Optional[str] = None,
@@ -425,6 +426,10 @@ class Agent(FlowLike[Any, Any]):
         config. An explicit ``name`` is used unchanged and must be unique per
         distinct agent config in the current process.
         """
+        if isinstance(reasoner, Reasoner):
+            DEFAULT_REGISTRY.register_reasoner(reasoner)
+            reasoner = reasoner.name
+
         caps = tuple(tools)
         tool_caps: list[Tool[Any, Any]] = []
         flow_cap_pairs: list[tuple[str, FlowLike[Any, Any]]] = []
@@ -602,7 +607,7 @@ class Agent(FlowLike[Any, Any]):
     def replace(
         self,
         *,
-        reasoner: Optional[str] = None,
+        reasoner: Optional[str | Reasoner] = None,
         budget_cost: Any = _KEEP,
         max_rounds: Optional[int] = None,
         instructions: Any = _KEEP,
@@ -611,6 +616,9 @@ class Agent(FlowLike[Any, Any]):
     ) -> "Agent":
         overrides: dict[str, Any] = {}
         if reasoner is not None:
+            if isinstance(reasoner, Reasoner):
+                DEFAULT_REGISTRY.register_reasoner(reasoner)
+                reasoner = reasoner.name
             overrides["reasoner"] = reasoner
         if max_rounds is not None:
             overrides["max_rounds"] = max_rounds
