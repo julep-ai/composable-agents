@@ -7,9 +7,9 @@ from typing import NotRequired, Required, TypedDict
 import pytest
 
 from composable_agents.deploy import _reasoner_identity
-from composable_agents.dotctx import Reasoner, register_reasoner
-from composable_agents.ir import canonical_json
+from composable_agents.dotctx import Reasoner
 from composable_agents.registry import DEFAULT_REGISTRY
+from composable_agents.ir import canonical_json
 
 
 @pytest.fixture
@@ -51,7 +51,7 @@ class NestedReply(TypedDict):
 def _registered_identity(reasoner: Reasoner) -> dict[str, object]:
     DEFAULT_REGISTRY.reasoners.pop(reasoner.name, None)
     try:
-        register_reasoner(reasoner)
+        DEFAULT_REGISTRY.register_reasoner(reasoner)
         return _reasoner_identity(reasoner.name)
     finally:
         DEFAULT_REGISTRY.reasoners.pop(reasoner.name, None)

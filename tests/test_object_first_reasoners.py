@@ -1,3 +1,4 @@
+import subprocess
 from typing import TypedDict
 
 import pytest
@@ -89,3 +90,20 @@ def test_think_accepts_object_at_authoring_time() -> None:
         return pp(lk(t)) | think(r, pp(lk(t)))
 
     assert f is not None  # @flow define-time accepted think(r, ...)
+
+
+def test_no_public_register_reasoner_or_reply_schema_left() -> None:
+    # register_reasoner must not appear as a public/import symbol; reply_schema must
+    # not appear as a constructor kwarg anywhere in package, examples, or docs.
+    out = subprocess.run(
+        ["grep", "-rn", "register_reasoner\\|reply_schema=",
+         "composable_agents", "examples", "docs-site/content"],
+        capture_output=True, text=True,
+    ).stdout
+    # The only allowed hit is the internal registry method definition.
+    leftovers = [
+        ln for ln in out.splitlines()
+        if "DEFAULT_REGISTRY.register_reasoner" not in ln
+        and "def register_reasoner(self" not in ln
+    ]
+    assert not leftovers, "leftover register_reasoner/reply_schema=: \n" + "\n".join(leftovers)

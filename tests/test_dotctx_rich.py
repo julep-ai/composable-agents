@@ -230,9 +230,8 @@ def test_reasoner_identity_adds_new_keys_only_when_present() -> None:
     assert ident["userRender"] == rich.reasoner.user_render
     assert ident["maxTokens"] == 800
 
-    from composable_agents.dotctx import Reasoner, register_reasoner
-
-    register_reasoner(Reasoner(name="plain.norich", model="m", system="s"))
+    from composable_agents.dotctx import Reasoner
+    DEFAULT_REGISTRY.register_reasoner(Reasoner(name="plain.norich", model="m", system="s"))
     plain = _reasoner_identity("plain.norich")
     assert "userRender" not in plain and "maxTokens" not in plain and "systemRender" not in plain
 
