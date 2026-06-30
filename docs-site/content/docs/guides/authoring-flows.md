@@ -195,6 +195,91 @@ The predicate or selector must be a registered `Pure` or pure name. Branch arms
 receive the subject by name, so the remaining arm parameter must match the
 subject handle label; pass other values as keyword captures.
 
+For record-field routing, use the explicit `switch(...)` form when you want to
+name the selector yourself, or `switch_on(subject, key=...)` when the branch key
+is just one field of the subject record. In both forms below, the branch subject
+handle is named `req`, so each arm keeps a `req` parameter and captures the
+separate `team_context` handle by keyword before merging it into the flowing
+input. JSON constants in branch arms should be wrapped in a one-parameter arm;
+`each(...)` is the helper that accepts JSON closure captures directly.
+
+<!-- ca:doctest expect-output -->
+```python
+from composable_agents import deploy, flow, pure, switch, switch_on
+
+
+@pure("authoring_action_selector")
+def action_selector(req: dict[str, object]) -> str:
+    return str(req["action"])
+
+
+@pure("authoring_team_context")
+def team_context_for_arm(req: dict[str, object]) -> dict[str, object]:
+    team_context = req["team_context"]
+    assert isinstance(team_context, dict)
+    return team_context
+
+
+@pure("authoring_assign_review")
+def assign_review(payload: dict[str, object]) -> dict[str, object]:
+    return {"route": "review", "team": payload["team"], "order_id": payload["order_id"]}
+
+
+@pure("authoring_assign_auto")
+def assign_auto(payload: dict[str, object]) -> dict[str, object]:
+    return {"route": "auto", "team": payload["team"], "order_id": payload["order_id"]}
+
+
+@flow
+def review(req: dict[str, object], team_context: dict[str, object]) -> dict[str, object]:
+    payload = req | team_context
+    return assign_review(payload)
+
+
+@flow
+def auto(req: dict[str, object], team_context: dict[str, object]) -> dict[str, object]:
+    payload = req | team_context
+    return assign_auto(payload)
+
+
+@flow
+def route_explicit(req: dict[str, object]) -> dict[str, object]:
+    team_context = team_context_for_arm(req, name="team_context")
+    return switch(
+        action_selector,
+        req,
+        cases={
+            "review": review(team_context=team_context),
+            "auto": auto(team_context=team_context),
+        },
+        default=auto(team_context=team_context),
+    )
+
+
+@flow
+def route_sugar(req: dict[str, object]) -> dict[str, object]:
+    team_context = team_context_for_arm(req, name="team_context")
+    return switch_on(
+        req,
+        key="action",
+        cases={
+            "review": review(team_context=team_context),
+            "auto": auto(team_context=team_context),
+        },
+        default=auto(team_context=team_context),
+    )
+
+
+payload = {"order_id": "ret-100", "action": "review", "team_context": {"team": "returns"}}
+print(deploy(route_explicit, tools=[]).dry_run(payload).value)
+print(deploy(route_sugar, tools=[]).dry_run(payload).value)
+```
+
+```text
+{'route': 'review', 'team': 'returns', 'order_id': 'ret-100'}
+{'route': 'review', 'team': 'returns', 'order_id': 'ret-100'}
+```
+
 Use `each(body, items, max_parallel=..., reducer=...)` for dynamic fan-out over a
 runtime list. The body can be a `@flow`, a partially-bound `@flow`, or a raw
 `Node` outside `@flow`.
