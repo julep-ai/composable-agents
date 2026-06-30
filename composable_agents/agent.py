@@ -428,7 +428,12 @@ class Agent(FlowLike[Any, Any]):
         """
         if isinstance(reasoner, Reasoner):
             DEFAULT_REGISTRY.register_reasoner(reasoner)
-            reasoner = reasoner.name
+            # Drive the controller from the object's *provider config*: its model is
+            # the provider model id (not its registry name), and its system seeds
+            # the controller unless an explicit instructions= overrides it.
+            if instructions is None and reasoner.system:
+                instructions = reasoner.system
+            reasoner = reasoner.model
 
         caps = tuple(tools)
         tool_caps: list[Tool[Any, Any]] = []
@@ -618,7 +623,12 @@ class Agent(FlowLike[Any, Any]):
         if reasoner is not None:
             if isinstance(reasoner, Reasoner):
                 DEFAULT_REGISTRY.register_reasoner(reasoner)
-                reasoner = reasoner.name
+                # Mirror __init__: drive the controller from the object's provider
+                # model (not its registry name) and seed instructions from its
+                # system unless instructions are being explicitly overridden here.
+                if instructions is _KEEP and reasoner.system:
+                    instructions = reasoner.system
+                reasoner = reasoner.model
             overrides["reasoner"] = reasoner
         if max_rounds is not None:
             overrides["max_rounds"] = max_rounds

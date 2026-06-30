@@ -58,6 +58,21 @@ def test_run_executes_pures_no_unknown_pure(pure_module: Path) -> None:
     assert isinstance(outcome.value, dict) and "seen" in outcome.value
 
 
+def test_run_large_input_not_limited_by_argv(pure_module: Path) -> None:
+    # A large but valid --input must not blow the OS single-arg limit
+    # (MAX_ARG_STRLEN, ~128 KiB on Linux). The child payload travels over stdin,
+    # not argv. Regression for ca run serializing the input into one argv string
+    # (Codex PR#9, P2 / WS1).
+    from composable_agents.ca.config import load_config
+    from composable_agents.ca.runner import run_agent_local
+
+    cfg = load_config(pure_module)
+    big = "X" * 300_000  # comfortably past MAX_ARG_STRLEN
+    outcome = run_agent_local(cfg, "triage", big, run_id="t-big")
+    assert outcome.error is None, f"run failed: {outcome.error}"
+    assert isinstance(outcome.value, dict) and "seen" in outcome.value
+
+
 import subprocess
 import sys
 

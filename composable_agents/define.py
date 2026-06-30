@@ -611,6 +611,15 @@ def think(reasoner_or_name: str | Reasoner, value: Handle, /, **kwargs: Any) -> 
 
 def think(reasoner_or_name: str | Reasoner, value: Optional[Handle] = None, /, **kwargs: Any) -> Node | Handle:
     """Dispatch to ``dsl.think(name)`` or append a reasoner step inside ``@flow``."""
+    from .dotctx import Reasoner as _Reasoner
+    from .registry import DEFAULT_REGISTRY
+
+    if isinstance(reasoner_or_name, _Reasoner):
+        # Object-first: register at authoring time so the reasoner is always
+        # resolvable downstream — including when deploy() is given an explicit
+        # CapabilityManifest (which forbids reasoners=) and must enforce the
+        # model-id allow-list. Idempotent for identical config.
+        DEFAULT_REGISTRY.register_reasoner(reasoner_or_name)
     name = _reasoner_name(reasoner_or_name)
     if value is None:
         return dsl.think(name, **kwargs)
@@ -745,16 +754,18 @@ def switch_on(
     without you hand-writing and registering a predicate. ``cases`` keys are matched by
     string equality against the field value.
     """
-    from .purity import is_registered, register_pure_with_source
+    from .purity import register_pure_with_source
 
     selector_name = f"switch_on.{key}"
-    if not is_registered(selector_name):
-        source = f"def _switch_on_selector(value):\n    return str(value[{key!r}])\n"
+    source = f"def _switch_on_selector(value):\n    return str(value[{key!r}])\n"
 
-        def _selector(value: Any) -> str:
-            return str(value[key])
+    def _selector(value: Any) -> str:
+        return str(value[key])
 
-        register_pure_with_source(selector_name, _selector, source)
+    # Always register by source: idempotent when the same key mints the same
+    # selector, but raises a clear conflict if an unrelated pure already squats on
+    # the ``switch_on.<key>`` name — never silently adopt a foreign predicate.
+    register_pure_with_source(selector_name, _selector, source)
     return switch(selector_name, subject, cases=cases, default=default)
 
 

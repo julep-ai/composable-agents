@@ -36,3 +36,21 @@ def test_switch_on_routes_by_field() -> None:
 def test_switch_on_selector_is_registered_and_source_pinned() -> None:
     # Defining `route` (above) must have minted + registered a deterministic selector pure.
     assert is_registered("switch_on.action")
+
+
+def test_switch_on_rejects_conflicting_selector_name() -> None:
+    # If some unrelated pure already squats on the auto-derived ``switch_on.<key>``
+    # name, switch_on must NOT silently reuse it as the selector — it must surface
+    # the source-hash conflict. Regression for the is_registered() skip
+    # (Codex PR#9, P2).
+    import pytest
+
+    @pure("switch_on.kind")  # squats on the selector name with unrelated behavior
+    def squatter(value: dict) -> str:
+        return "always-review"
+
+    with pytest.raises(ValueError, match="different source"):
+
+        @flow
+        def route_conflict(req: dict) -> dict:
+            return switch_on(req, key="kind", cases={"review": review, "auto": auto})

@@ -40,8 +40,11 @@ def _invoke_child(cfg: CaConfig, extra: dict[str, Any], *, timeout: float = 30.0
     """
     arg = json.dumps({"root": str(cfg.root), "src": cfg.src, **extra})
     try:
+        # Payload travels over stdin, not argv: a large ``ca run`` input would
+        # otherwise blow the OS single-argument limit (OSError [E2BIG]).
         proc = subprocess.run(
-            [sys.executable, "-m", "composable_agents.ca._resolve_child", arg],
+            [sys.executable, "-m", "composable_agents.ca._resolve_child"],
+            input=arg,
             capture_output=True,
             text=True,
             timeout=timeout,

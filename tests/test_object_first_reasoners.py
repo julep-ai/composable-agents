@@ -65,6 +65,79 @@ def test_agent_accepts_reasoner_object() -> None:
     assert agent is not None
 
 
+def test_agent_object_preserves_model_and_system() -> None:
+    # Agent(reasoner=obj) must build a controller that USES the object's model and
+    # system, not the object's *name*. Regression for the object-first path sending
+    # `r.name` to the provider as if it were the model id (Codex PR#9, P1).
+    from composable_agents import Agent, Reasoner
+    from composable_agents.dotctx import get_reasoner
+
+    r = Reasoner(
+        name="ws5_ctrl_modelsys",
+        model="anthropic:claude-haiku-4-5-20251001",
+        system="be terse",
+        reply={"out": "str"},
+    )
+    agent = Agent(reasoner=r)
+    ctrl = get_reasoner(agent.name)  # the controller reasoner the loop actually calls
+    assert ctrl.model == "anthropic:claude-haiku-4-5-20251001"  # NOT "ws5_ctrl_modelsys"
+    assert ctrl.system == "be terse"  # the object's system is not dropped
+
+
+def test_agent_replace_reasoner_object_preserves_model_and_system() -> None:
+    # Agent.replace(reasoner=obj) must mirror __init__: use the object's model and
+    # system, not its name. Regression for the second object-first conversion site
+    # missed by the initial fix (Codex re-review of PR#9, P2).
+    from composable_agents import Agent, Reasoner
+    from composable_agents.dotctx import get_reasoner
+
+    base = Agent(reasoner="anthropic:old-model", instructions="old")
+    r2 = Reasoner(
+        name="ws5_replace_obj",
+        model="anthropic:model-new",
+        system="new-sys",
+        reply={"o": "str"},
+    )
+    agent2 = base.replace(reasoner=r2)
+    ctrl = get_reasoner(agent2.name)
+    assert ctrl.model == "anthropic:model-new"  # NOT "ws5_replace_obj"
+    assert ctrl.system == "new-sys"  # the new object's system, not the stale "old"
+
+
+def test_capability_models_enforced_for_object_reasoner() -> None:
+    # think(obj) must register the object so an explicit CapabilityManifest can
+    # enforce its model-id allow-list. Regression for the bypass where an
+    # unregistered object reasoner made CAP_MODEL_ID_DENIED silently skip
+    # (Codex PR#9, P1). deploy() forbids reasoners= with capabilities=, so the
+    # object can only become resolvable via think(obj).
+    from composable_agents import CapabilityManifest, Reasoner, deploy, flow, think, tool
+    from composable_agents.errors import ValidationError
+
+    @tool(effect="read", idempotent=True)
+    def lk(t: str) -> dict:
+        return {"q": t}
+
+    r = Reasoner(
+        name="ws5_cap_obj",
+        model="anthropic:claude-haiku-4-5-20251001",
+        reply={"o": "str"},
+    )
+
+    @flow
+    def f(t: str) -> dict:
+        return think(r, lk(t))
+
+    caps = CapabilityManifest.from_dict(
+        {
+            "tools": [{"name": "lk", "effect": "read", "idempotency": "native"}],
+            "models": ["only-this-other-model"],  # r.model deliberately not granted
+        }
+    )
+    with pytest.raises(ValidationError) as ei:
+        deploy(f, tools=[lk], capabilities=caps)
+    assert any(d.code == "CAP_MODEL_ID_DENIED" for d in ei.value.diagnostics)
+
+
 def test_register_reasoner_not_public() -> None:
     import composable_agents
 
@@ -101,10 +174,13 @@ def test_no_public_register_reasoner_or_reply_schema_left() -> None:
          "composable_agents", "examples", "docs-site/content", "README.md", "CONTRIBUTING.md"],
         capture_output=True, text=True,
     ).stdout
-    # The only allowed hit is the internal registry method definition.
+    # Allowed hits are the internal Registry method: its definition and method
+    # calls on a registry instance (``DEFAULT_REGISTRY.register_reasoner`` or a
+    # supplied ``registry.register_reasoner``). The removed public module-level
+    # ``register_reasoner`` function / import has no leading dot and is flagged.
     leftovers = [
         ln for ln in out.splitlines()
-        if "DEFAULT_REGISTRY.register_reasoner" not in ln
+        if ".register_reasoner" not in ln
         and "def register_reasoner(self" not in ln
     ]
     assert not leftovers, "leftover register_reasoner/reply_schema=: \n" + "\n".join(leftovers)

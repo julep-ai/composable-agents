@@ -173,7 +173,12 @@ def _freeze_agent(
 
 
 def main() -> int:
-    payload = json.loads(sys.argv[1])
+    # The parent writes the request payload to stdin (not argv) so a large
+    # ``ca run`` input cannot exceed the OS single-argument limit
+    # (MAX_ARG_STRLEN, ~128 KiB on Linux). argv[1] is honored as a fallback for
+    # any direct caller.
+    raw = sys.argv[1] if len(sys.argv) > 1 else sys.stdin.read()
+    payload = json.loads(raw)
     root: str = payload["root"]
     src: list[str] = payload["src"]
     target: str = payload["name"]

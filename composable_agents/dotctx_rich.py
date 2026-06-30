@@ -674,7 +674,7 @@ def load_rich_dotctx(path: str, *, registry: Registry = DEFAULT_REGISTRY) -> Ric
         user_render=user_render,
         max_tokens=settings.get("max_tokens") or settings.get("maxTokens"),
     )
-    reasoner = DEFAULT_REGISTRY.register_reasoner(reasoner)
+    reasoner = registry.register_reasoner(reasoner)
 
     return RichDotctx(
         reasoner=reasoner,
