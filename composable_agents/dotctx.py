@@ -41,6 +41,7 @@ from typing import NotRequired, Required  # type: ignore[attr-defined]
 from .dsl import app, iter_up_to, sub, think
 from .ir import ContextPolicy, Node, SubContract
 from .kinds import ContextScope, Shape, SummaryPolicy
+from .model_slugs import EFFORT_LEVELS, normalize_model_slug
 from .registry import DEFAULT_REGISTRY
 
 _REPLY_UNSET = object()
@@ -223,6 +224,23 @@ def _sub_from(d: Optional[dict[str, Any]]) -> Optional[SubContract]:
     return SubContract(shape=shape, summary_policy=sp)
 
 
+def _model_and_effort(settings: dict[str, Any]) -> tuple[str, Optional[str], int]:
+    """Canonical model, effort (explicit key beats @suffix), output_retries."""
+    slug = normalize_model_slug(str(settings.get("model", "claude-sonnet-4")))
+    effort = settings.get("reasoning_effort") or settings.get("reasoningEffort")
+    if effort is not None:
+        effort = str(effort).strip().lower()
+        if effort not in EFFORT_LEVELS:
+            raise ValueError(
+                f"reasoning_effort {effort!r} is not one of {sorted(EFFORT_LEVELS)}"
+            )
+    retries = int(settings.get("output_retries")
+                  or settings.get("outputRetries") or 0)
+    if retries < 0:
+        raise ValueError("output_retries must be >= 0")
+    return slug.model, (effort or slug.reasoning_effort), retries
+
+
 def reasoner_from_settings(settings: dict[str, Any], *, name: Optional[str] = None,
                         base_dir: Optional[str] = None) -> Reasoner:
     """Build (and register) a :class:`Reasoner` from a settings mapping.
@@ -251,9 +269,10 @@ def reasoner_from_settings(settings: dict[str, Any], *, name: Optional[str] = No
 
     scope = ContextScope(settings["context"]) if settings.get("context") else ContextScope.LOCAL
 
+    model, effort, output_retries = _model_and_effort(settings)
     reasoner = Reasoner(
         name=nm,
-        model=settings.get("model", "claude-sonnet-4"),
+        model=model,
         system=system,
         reply=reply_schema,
         tools=tuple(settings.get("tools", []) or []),
@@ -265,6 +284,8 @@ def reasoner_from_settings(settings: dict[str, Any], *, name: Optional[str] = No
         system_render=settings.get("system_render") or settings.get("systemRender"),
         user_render=settings.get("user_render") or settings.get("userRender"),
         max_tokens=settings.get("max_tokens") or settings.get("maxTokens"),
+        reasoning_effort=effort,
+        output_retries=output_retries,
     )
     return DEFAULT_REGISTRY.register_reasoner(reasoner)
 

@@ -37,7 +37,7 @@ except ImportError as e:  # pragma: no cover - exercised via sys.modules patchin
     ) from e
 
 from .capabilities import ToolGrant
-from .dotctx import Reasoner, _sub_from
+from .dotctx import Reasoner, _model_and_effort, _sub_from
 from .kinds import ContextScope
 from .registry import DEFAULT_REGISTRY, Registry, ToolSchemaExpectation
 
@@ -53,6 +53,10 @@ _ALLOWED_SETTINGS = frozenset(
         "maxRounds",
         "max_tokens",
         "maxTokens",
+        "reasoning_effort",
+        "reasoningEffort",
+        "output_retries",
+        "outputRetries",
         "agent",
         "sub",
         "context",
@@ -659,9 +663,10 @@ def load_rich_dotctx(path: str, *, registry: Registry = DEFAULT_REGISTRY) -> Ric
     tools = tuple(dict.fromkeys([*(str(t) for t in settings_tools), *tool_keys]))
 
     scope = ContextScope(settings["context"]) if settings.get("context") else ContextScope.LOCAL
+    model, effort, output_retries = _model_and_effort(settings)
     reasoner = Reasoner(
         name=package,
-        model=settings.get("model", "claude-sonnet-4"),  # @effort suffixes pass through untouched
+        model=model,
         system="",
         reply=reply_schema,
         tools=tools,
@@ -673,6 +678,8 @@ def load_rich_dotctx(path: str, *, registry: Registry = DEFAULT_REGISTRY) -> Ric
         system_render=system_render,
         user_render=user_render,
         max_tokens=settings.get("max_tokens") or settings.get("maxTokens"),
+        reasoning_effort=effort,
+        output_retries=output_retries,
     )
     reasoner = registry.register_reasoner(reasoner)
 

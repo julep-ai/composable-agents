@@ -73,7 +73,8 @@ def test_rich_bundle_loads_reasoner_with_renderers() -> None:
     b = rich.reasoner
     assert b.name == "researcher"               # directory name minus .ctx
     assert b.system == ""                       # templates never live on the Reasoner
-    assert b.model == "openai/gpt-5.4-mini@low" # @effort suffix passes through untouched
+    assert b.model == "openai:gpt-5.4-mini"     # canonicalized; @effort suffix extracted
+    assert b.reasoning_effort == "low"
     assert b.temperature == 0.3 and b.max_rounds == 4 and b.max_tokens == 800
     assert b.system_render == rich.renderer_names["system"]
     assert b.user_render == rich.renderer_names["user"]
@@ -179,12 +180,12 @@ def test_rich_dotctx_reasoner_lands_in_supplied_registry(tmp_path: Path) -> None
 def test_unknown_settings_keys_error(tmp_path: Path) -> None:
     pkg = _write_pkg(
         tmp_path, "weird.ctx",
-        "model: m\nreasoning_effort: low\noutput_retries: 0\n",
+        "model: m\nrequire_tool_call: true\nresponse_format: json\n",
         {"prompt.j2": "hello"},
     )
     with pytest.raises(ValueError) as ei:
         load_dotctx(str(pkg))
-    assert "output_retries" in str(ei.value) and "reasoning_effort" in str(ei.value)
+    assert "require_tool_call" in str(ei.value) and "response_format" in str(ei.value)
 
 
 def test_bundle_rejects_extra_roles(tmp_path: Path) -> None:
