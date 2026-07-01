@@ -149,6 +149,8 @@ class Reasoner:
     system_render: Optional[str] = None   # registered renderer name (a string); None => use `system`
     user_render: Optional[str] = None     # registered renderer name for the user turn
     max_tokens: Optional[int] = None      # forwarded to the provider call when set
+    reasoning_effort: Optional[str] = None  # provider thinking effort (model_slugs.EFFORT_LEVELS)
+    output_retries: int = 0               # re-asks when a schema'd reply fails to parse
 
     def __init__(
         self,
@@ -166,6 +168,8 @@ class Reasoner:
         max_tokens: Optional[int] = None,
         *,
         reply: Any = _REPLY_UNSET,
+        reasoning_effort: Optional[str] = None,
+        output_retries: int = 0,
     ) -> None:
         if reply is _REPLY_UNSET or reply is None:
             materialized = None
@@ -187,6 +191,8 @@ class Reasoner:
         object.__setattr__(self, "system_render", system_render)
         object.__setattr__(self, "user_render", user_render)
         object.__setattr__(self, "max_tokens", max_tokens)
+        object.__setattr__(self, "reasoning_effort", reasoning_effort)
+        object.__setattr__(self, "output_retries", output_retries)
 
 
 _REASONERS: dict[str, Reasoner] = DEFAULT_REGISTRY.reasoners

@@ -388,6 +388,8 @@ def _with_model(reasoner: Reasoner, model: str) -> Reasoner:
         user_render=reasoner.user_render,
         max_tokens=reasoner.max_tokens,
         reply=reasoner.reply_schema,
+        reasoning_effort=reasoner.reasoning_effort,
+        output_retries=reasoner.output_retries,
     )
 
 
