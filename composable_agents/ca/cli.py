@@ -32,7 +32,16 @@ app.command("chat")(chat_command)
 app.command("listen")(listen_command)
 app.command("trigger")(trigger_command)
 
-VERSION = "0.1.0"
+def _package_version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("composable-agents")
+    except PackageNotFoundError:  # editable/source checkout without metadata
+        return "unknown"
+
+
+VERSION = _package_version()
 
 
 class _FailSeverity(str, _enum.Enum):
