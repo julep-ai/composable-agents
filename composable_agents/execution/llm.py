@@ -268,7 +268,13 @@ async def complete_reasoner(
                 schema_hint=schema, user_text=user_text, transcript=transcript,
             )
             kwargs = {}
-        if reasoner.temperature is not None:
+        effort = reasoner.reasoning_effort
+        if effort is not None:
+            kwargs["reasoning_effort"] = effort
+        # Thinking modes reject or require fixed sampling params; omit
+        # temperature whenever reasoning is actually enabled (mirrors mem-mcp's
+        # get_temperature_for_reasoning, in provider-safe form).
+        if reasoner.temperature is not None and (effort is None or effort == "none"):
             kwargs["temperature"] = reasoner.temperature
         if reasoner.max_tokens is not None:
             kwargs["max_tokens"] = reasoner.max_tokens
