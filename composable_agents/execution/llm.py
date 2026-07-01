@@ -258,7 +258,7 @@ async def complete_reasoner(
     provider, model = _split_model(reasoner.model, default_provider)
     schema = reasoner.reply_schema
 
-    async def call(*, native: bool) -> Any:
+    async def call(*, native: bool, retry_note: Optional[str] = None) -> Any:
         if native and schema is not None:
             messages = _messages(
                 reasoner.system, value,
@@ -271,6 +271,8 @@ async def complete_reasoner(
                 schema_hint=schema, user_text=user_text, transcript=transcript,
             )
             kwargs = {}
+        if retry_note is not None:
+            messages.append({"role": "user", "content": retry_note})
         effort = reasoner.reasoning_effort
         if effort is not None:
             kwargs["reasoning_effort"] = effort
@@ -286,24 +288,49 @@ async def complete_reasoner(
 
     started = time.time()
     fallback_reason: Optional[str] = None
-    if schema is not None and provider not in _PROMPT_FALLBACK_PROVIDERS:
-        try:
-            completion = await call(native=True)
-        except Exception as exc:
-            if classify_error(exc) is ErrorClass.CONFIG:
-                raise  # auth/config failure — fallback must never mask it
-            # Provider/any-llm could not honor response_format; reissue with the
-            # schema injected into the prompt — recorded, never silent (G-8).
-            fallback_reason = repr(exc)
-            logger.warning(
-                "response_format fallback for %s (%s): retrying prompt-injected: %s",
-                reasoner.name, provider, fallback_reason,
-            )
-            completion = await call(native=False)
-    else:
-        completion = await call(native=False)
-    ended = time.time()
+    native_ok = True   # latched: after one response_format failure, never retry native
+    retries_used = 0
+
+    async def dispatch_once(retry_note: Optional[str] = None) -> Any:
+        nonlocal fallback_reason, native_ok
+        if schema is not None and native_ok and provider not in _PROMPT_FALLBACK_PROVIDERS:
+            try:
+                return await call(native=True, retry_note=retry_note)
+            except Exception as exc:
+                if classify_error(exc) is ErrorClass.CONFIG:
+                    raise  # auth/config failure — fallback must never mask it
+                # Provider/any-llm could not honor response_format; reissue with
+                # the schema injected into the prompt — recorded, never silent
+                # (G-8). The latch records the first downgrade only and stops
+                # native re-attempts on subsequent re-asks.
+                native_ok = False
+                fallback_reason = repr(exc)
+                logger.warning(
+                    "response_format fallback for %s (%s): retrying prompt-injected: %s",
+                    reasoner.name, provider, fallback_reason,
+                )
+        return await call(native=False, retry_note=retry_note)
+
+    completion = await dispatch_once()
     reply = _parse_reply(completion, expect_json=schema is not None)
+    while (
+        schema is not None
+        and not isinstance(reply, dict)
+        and retries_used < reasoner.output_retries
+    ):
+        retries_used += 1
+        logger.warning(
+            "reply for %s did not parse as JSON object; re-ask %d/%d",
+            reasoner.name, retries_used, reasoner.output_retries,
+        )
+        completion = await dispatch_once(
+            retry_note=(
+                "Your previous reply was not a single valid JSON object matching "
+                "the required schema. Reply again with ONLY the JSON object."
+            )
+        )
+        reply = _parse_reply(completion, expect_json=True)
+    ended = time.time()
     pt, ct, tt = _usage_of(completion)
     meta = LlmCallMeta(
         served_model=_served_model_of(completion, model),
@@ -311,6 +338,7 @@ async def complete_reasoner(
         input_tokens=pt, output_tokens=ct, total_tokens=tt,
         started_at=started, ended_at=ended,
         response_format_fallback=fallback_reason,
+        output_retries_used=retries_used,
     )
     return LlmResult(reply=reply, meta=meta)
 
