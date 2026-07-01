@@ -31,6 +31,7 @@ class LlmCallMeta:
     ended_at: float | None = None
     attempts: tuple[AttemptMeta, ...] = ()
     cost: float | None = None
+    response_format_fallback: str | None = None
 
     def to_attrs(self) -> dict[str, Any]:
         out: dict[str, Any] = {"llm.model": self.served_model, "llm.provider": self.provider}
@@ -46,6 +47,8 @@ class LlmCallMeta:
             out["llm.ended_at"] = self.ended_at
         if self.cost is not None:
             out["llm.cost"] = self.cost
+        if self.response_format_fallback is not None:
+            out["llm.response_format_fallback"] = self.response_format_fallback
         if self.attempts:
             out["llm.attempts"] = [
                 {"model": a.model, "provider": a.provider, "outcome": a.outcome,

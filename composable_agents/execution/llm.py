@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Optional
@@ -50,6 +51,8 @@ from ..resilience import (
     classify_error,
 )
 from .llm_result import AttemptMeta, LlmCallMeta, LlmResult
+
+logger = logging.getLogger(__name__)
 
 # any-llm's ``acompletion``-shaped callable: keyword-driven, returns an
 # OpenAI-typed completion (``.choices[0].message.{content,parsed}``).
@@ -282,12 +285,20 @@ async def complete_reasoner(
         return await acompletion(provider=provider, model=model, messages=messages, **kwargs)
 
     started = time.time()
+    fallback_reason: Optional[str] = None
     if schema is not None and provider not in _PROMPT_FALLBACK_PROVIDERS:
         try:
             completion = await call(native=True)
-        except Exception:
-            # Provider/any-llm could not honor response_format; reissue the round
-            # with the schema injected into the prompt instead.
+        except Exception as exc:
+            if classify_error(exc) is ErrorClass.CONFIG:
+                raise  # auth/config failure — fallback must never mask it
+            # Provider/any-llm could not honor response_format; reissue with the
+            # schema injected into the prompt — recorded, never silent (G-8).
+            fallback_reason = repr(exc)
+            logger.warning(
+                "response_format fallback for %s (%s): retrying prompt-injected: %s",
+                reasoner.name, provider, fallback_reason,
+            )
             completion = await call(native=False)
     else:
         completion = await call(native=False)
@@ -299,6 +310,7 @@ async def complete_reasoner(
         provider=provider,
         input_tokens=pt, output_tokens=ct, total_tokens=tt,
         started_at=started, ended_at=ended,
+        response_format_fallback=fallback_reason,
     )
     return LlmResult(reply=reply, meta=meta)
 
