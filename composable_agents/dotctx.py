@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import (
     Any,
     Literal,
+    Mapping,
     Optional,
     Sequence,
     Union,
@@ -300,23 +301,22 @@ def is_rich_dotctx(path: str) -> bool:
     return any(os.path.exists(os.path.join(path, m)) for m in _RICH_MARKERS)
 
 
-def load_dotctx(path: str) -> Reasoner:
+def load_dotctx(path: str, *, env: Optional[Mapping[str, str]] = None) -> Reasoner:
     """Read ``<path>/settings.yaml`` (or ``settings.yml``) into a Reasoner.
 
     The reasoner's name defaults to the directory name when ``settings.yaml`` omits
     one, so a dotctx at ``reasoners/planner/`` registers as ``planner``. Packages
     carrying rich-layout files (``prompt.j2``, ``messages/``, ``schema.pyi``,
     ``tools.pyi``) are loaded by :mod:`composable_agents.dotctx_rich`.
+
+    Settings carrying yglu expressions (``!? $env.get(...)``) are evaluated by
+    :mod:`composable_agents.dotctx_yglu` against exactly ``env`` (or the
+    module-level default the CLI sets) — never the ambient process environment.
     """
     if is_rich_dotctx(path):
         from . import dotctx_rich  # hard ImportError without the [dotctx] extra
 
-        return dotctx_rich.load_rich_dotctx(path).reasoner
-
-    try:
-        import yaml
-    except ModuleNotFoundError as e:  # pragma: no cover
-        raise RuntimeError("PyYAML is required to load a dotctx from disk") from e
+        return dotctx_rich.load_rich_dotctx(path, env=env).reasoner
 
     settings_path = None
     for fn in ("settings.yaml", "settings.yml"):
@@ -328,7 +328,20 @@ def load_dotctx(path: str) -> Reasoner:
         raise FileNotFoundError(f"no settings.yaml in dotctx dir: {path!r}")
 
     with open(settings_path, "r", encoding="utf-8") as fh:
-        settings = yaml.safe_load(fh) or {}
+        text = fh.read()
+
+    # dotctx_yglu imports nothing optional at module scope, so this is always safe.
+    from .dotctx_yglu import has_yglu_tags, load_settings as load_yglu_settings
+
+    if has_yglu_tags(text):
+        settings = load_yglu_settings(text, env=env, filepath=settings_path)
+    else:
+        try:
+            import yaml
+        except ModuleNotFoundError as e:  # pragma: no cover
+            raise RuntimeError("PyYAML is required to load a dotctx from disk") from e
+
+        settings = yaml.safe_load(text) or {}
     default_name = os.path.basename(os.path.normpath(path))
     return reasoner_from_settings(settings, name=settings.get("name", default_name),
                                base_dir=path)

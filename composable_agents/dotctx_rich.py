@@ -596,14 +596,20 @@ def parse_tools_pyi(source: str) -> tuple[Optional[str], list[ToolStub]]:
 # --------------------------------------------------------------------------- #
 # The loader.
 # --------------------------------------------------------------------------- #
-def _read_settings(path: str) -> dict[str, Any]:
-    import yaml
+def _read_settings(path: str, *, env: Optional[Mapping[str, str]] = None) -> dict[str, Any]:
+    from .dotctx_yglu import has_yglu_tags, load_settings as load_yglu_settings
 
     for fn in ("settings.yaml", "settings.yml"):
         cand = os.path.join(path, fn)
         if os.path.exists(cand):
             with open(cand, "r", encoding="utf-8") as fh:
-                loaded = yaml.safe_load(fh) or {}
+                text = fh.read()
+            if has_yglu_tags(text):
+                loaded = load_yglu_settings(text, env=env, filepath=cand)
+            else:
+                import yaml
+
+                loaded = yaml.safe_load(text) or {}
             if not isinstance(loaded, dict):
                 raise ValueError(f"dotctx settings must be a YAML mapping: {cand!r}")
             return loaded
@@ -615,9 +621,14 @@ def _default_name(path: str) -> str:
     return base[:-4] if base.endswith(".ctx") else base
 
 
-def load_rich_dotctx(path: str, *, registry: Registry = DEFAULT_REGISTRY) -> RichDotctx:
+def load_rich_dotctx(
+    path: str,
+    *,
+    registry: Registry = DEFAULT_REGISTRY,
+    env: Optional[Mapping[str, str]] = None,
+) -> RichDotctx:
     """Load a rich ``.ctx`` package: register renderers, reasoner, expectations."""
-    settings = _read_settings(path)
+    settings = _read_settings(path, env=env)
     unknown = sorted(set(settings) - _ALLOWED_SETTINGS)
     if unknown:
         raise ValueError(
