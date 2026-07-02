@@ -23,6 +23,7 @@ from composable_agents.execution.llm import (
     _resolve_acompletion,
     complete_reasoner,
 )
+from composable_agents.prompt import rendered_user_for
 from composable_agents.registry import DEFAULT_REGISTRY, Registry
 
 
@@ -112,6 +113,42 @@ def _turn_from_reply(reply: Any) -> Turn:
     return Turn(output=reply, tool_calls=[], tool_results=[], content=content, refusal=None)
 
 
+def _seed_user_turn(reasoner: Any, value: Any) -> dict[str, Any]:
+    """The leading user turn the model saw on round 0, replayed so later rounds
+    start from a valid user turn (providers reject a leading assistant turn)."""
+    text = rendered_user_for(reasoner, value)
+    content = text if text is not None else (value if isinstance(value, str) else json.dumps(value))
+    return {"role": "user", "content": content}
+
+
+def _assistant_call_turn(tool_calls: list[dict[str, Any]]) -> dict[str, Any]:
+    """An assistant turn carrying this round's native tool calls (OpenAI grammar),
+    so execution/llm._transcript_messages round-trips them as native tool_calls."""
+    calls: list[dict[str, Any]] = []
+    for tc in tool_calls:
+        args = tc.get("input") if isinstance(tc, dict) else None
+        name = (tc.get("tool") if isinstance(tc, dict) else None) or ""
+        calls.append(
+            {
+                "id": tc.get("id") if isinstance(tc, dict) else None,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": json.dumps(args if args is not None else {}),
+                },
+            }
+        )
+    return {"role": "assistant", "content": None, "tool_calls": calls}
+
+
+def _tool_result_turn(call_id: Optional[str], content: Any) -> dict[str, Any]:
+    """A tool-result turn matching a prior assistant tool_call id (native grammar)."""
+    turn: dict[str, Any] = {"role": "tool", "content": content}
+    if call_id is not None:
+        turn["tool_call_id"] = call_id
+    return turn
+
+
 async def _run_single_shot(
     reasoner: Any,
     sample: Sample,
@@ -130,8 +167,18 @@ async def _run_tool_loop(
 ) -> Any:
     reasoner = rich.reasoner
     tool_defs = _provider_tool_defs(rich.expected_tool_schemas)
+    stop_on = sample.stop_on
+    turns_bound = getattr(stop_on, "_ca_max_turns", None)
+    if isinstance(turns_bound, int):
+        # "stop_after_turns(n) -> max_rounds override" (plan Task 8): the sample's
+        # turn budget governs the run. +1 headroom so the StopFn fires as a clean
+        # 'done' at the next controller entry BEFORE the loop's hard max_rounds cap
+        # trips (n == cap would otherwise terminate as 'max_rounds', not 'done').
+        max_rounds = turns_bound + 1
+    else:
+        max_rounds = reasoner.max_rounds or 24
     cfg = AgentConfig(
-        max_rounds=reasoner.max_rounds or 24,
+        max_rounds=max_rounds,
         native_tools=True,
         require_tool_call=reasoner.require_tool_call,
     )
@@ -139,27 +186,50 @@ async def _run_tool_loop(
     mock_tools = sample.mock_tools or {}
     counters: dict[str, int] = {}
 
+    base_value = dict(sample.input) if isinstance(sample.input, dict) else sample.input
+    # Neutral transcript accumulated across rounds so the controller SEES its own
+    # prior tool calls and their observations (native tool-call grammar per
+    # execution/llm._transcript_messages). Without this the model re-renders the
+    # static sample input every round and is blind to tool results and errors —
+    # it could never recover from a tool-error observation or chain tool results.
+    transcript: list[dict[str, Any]] = []
+    # This round's provider tool_call ids, positionally aligned with the loop's
+    # call_index, so each tool observation attaches to the right assistant call.
+    round_call_ids: list[Optional[str]] = []
+
     async def call_tool(
         name: str,
         value: Any,
         *,
         call_index: Optional[int] = None,
     ) -> Any:
-        del call_index
-        if name not in mock_tools:
-            raise KeyError(f"tool {name!r} was not mocked for this eval sample")
-        return _resolve_mock(mock_tools[name], value, counters, name)
+        idx = call_index if call_index is not None else 0
+        call_id = round_call_ids[idx] if 0 <= idx < len(round_call_ids) else None
+        try:
+            if name not in mock_tools:
+                raise KeyError(f"tool {name!r} was not mocked for this eval sample")
+            out = _resolve_mock(mock_tools[name], value, counters, name)
+        except Exception as exc:  # noqa: BLE001 - mirror the loop's observation wrapping
+            # Record the SAME error observation the loop will surface as state.last
+            # so the NEXT round's controller can recover from it (Task 1 / Phase 3
+            # acceptance), then re-raise so the loop records TraceEntry.error.
+            transcript.append(_tool_result_turn(call_id, {"error": repr(exc), "tool": name}))
+            raise
+        transcript.append(_tool_result_turn(call_id, out))
+        return out
 
-    stop_on = sample.stop_on
     turn_index = 0
     last_turn: Optional[Turn] = None
 
     async def invoke_controller(payload: dict[str, Any]) -> Any:
-        nonlocal last_turn, turn_index
+        nonlocal last_turn, turn_index, round_call_ids
         if last_turn is not None and stop_on(last_turn, turn_index):
-            return {"done": True, "output": last_turn.output}
+            # Clean StopFn 'done': the output is the post-tool observation
+            # (payload["input"] == state.last), NOT the assistant tool-call reply
+            # dict — an output-based scorer must see the tool result, not tool_calls.
+            return {"done": True, "output": payload.get("input")}
         turn_index += 1
-        value = dict(sample.input) if isinstance(sample.input, dict) else sample.input
+        value = dict(base_value) if isinstance(base_value, dict) else base_value
         if isinstance(value, dict) and ROUND_NOTE_KEY in payload:
             value[ROUND_NOTE_KEY] = payload[ROUND_NOTE_KEY]
         result = await complete_reasoner(
@@ -168,9 +238,21 @@ async def _run_tool_loop(
             acompletion=acompletion,
             tools=tool_defs,
             parallel_tool_calls=True,
+            transcript=list(transcript) if transcript else None,
         )
-        last_turn = _turn_from_reply(result.reply)
-        return result.reply
+        reply = result.reply
+        last_turn = _turn_from_reply(reply)
+        tool_calls = reply.get("tool_calls") if isinstance(reply, dict) else None
+        if isinstance(tool_calls, list) and tool_calls:
+            if not transcript:
+                transcript.append(_seed_user_turn(reasoner, base_value))
+            transcript.append(_assistant_call_turn(tool_calls))
+            round_call_ids = [
+                (tc.get("id") if isinstance(tc, dict) else None) for tc in tool_calls
+            ]
+        else:
+            round_call_ids = []
+        return reply
 
     return await drive_agent_loop(
         input=sample.input,

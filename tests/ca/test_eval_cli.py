@@ -12,8 +12,15 @@ pytest.importorskip("jinja2")
 pytest.importorskip("yglu")  # the vendored .ctx settings carry `!?` env expressions
 
 from composable_agents.ca import cli
-from composable_agents.ca.evalrun import EvalReport, diff_reports, run_eval, run_eval_sync
+from composable_agents.ca.evalrun import EvalReport, _run_tool_loop, diff_reports, run_eval, run_eval_sync
 from composable_agents.dotctx import load_dotctx
+from composable_agents.dotctx_evals import (
+    MockToolConfig,
+    Sample,
+    stop_after_turns,
+    stop_when_terminal_tool,
+)
+from composable_agents.dotctx_rich import load_rich_dotctx
 from conftest import run
 
 
@@ -100,18 +107,71 @@ class SingleShotFake:
             self.in_flight -= 1
 
 
+def _last_tool_result(messages: list[dict[str, Any]]) -> Any:
+    for message in reversed(messages):
+        if message.get("role") == "tool":
+            return message.get("content")
+    return None
+
+
 class ToolLoopFake:
+    """Scripted tool model: call ``tool_name`` once, then finish after seeing its
+    observation. Faithful to a real provider (branches on the tool result the
+    threaded transcript carries), unlike a message-identity fake."""
+
     def __init__(self, tool_name: str, tool_args_json: str):
         self.tool_name = tool_name
         self.tool_args_json = tool_args_json
-        self._seen: dict[str, int] = {}
 
     async def __call__(self, **kwargs):
-        key = json.dumps(kwargs["messages"], sort_keys=True, default=str)
-        n = self._seen.get(key, 0)
-        self._seen[key] = n + 1
-        if n == 0:
-            return _tool_call_completion("c1", self.tool_name, self.tool_args_json)
+        messages = kwargs["messages"]
+        if any(m.get("role") == "tool" for m in messages):
+            return _parsed({"done": True})
+        return _tool_call_completion("c1", self.tool_name, self.tool_args_json)
+
+
+class AlwaysCallsFake:
+    """Never finishes on its own — calls ``tool_name`` every round. Used to prove
+    a StopFn (not the model) terminates the loop."""
+
+    def __init__(self, tool_name: str, args_json: str = "{}"):
+        self.tool_name = tool_name
+        self.args_json = args_json
+        self.calls = 0
+
+    async def __call__(self, **kwargs):
+        self.calls += 1
+        return _tool_call_completion(f"c{self.calls}", self.tool_name, self.args_json)
+
+
+class RecoveringFake:
+    """Calls the (unmocked -> raising) ``search`` tool first; after seeing the
+    error observation, recovers by calling ``record_memory``; finishes once that
+    succeeds. Proves the controller acts on prior tool observations."""
+
+    async def __call__(self, **kwargs):
+        last = _last_tool_result(kwargs["messages"])
+        if last is None:
+            return _tool_call_completion("c1", "search", '{"query": "x"}')
+        text = last if isinstance(last, str) else json.dumps(last)
+        if "error" in text:
+            return _tool_call_completion("c2", "record_memory", '{"content": "recovered"}')
+        return _parsed({"done": True})
+
+
+class SearchThenRecordFake:
+    """Calls ``search``, reads the returned top hit out of the transcript, then
+    records it. Proves the model can CHAIN a prior tool result into the next call."""
+
+    async def __call__(self, **kwargs):
+        results = [m for m in kwargs["messages"] if m.get("role") == "tool"]
+        if not results:
+            return _tool_call_completion("c1", "search", '{"query": "who"}')
+        if len(results) == 1:
+            text = results[0].get("content", "")
+            text = text if isinstance(text, str) else json.dumps(text)
+            hit = "alice" if "alice" in text else "none"
+            return _tool_call_completion("c2", "record_memory", json.dumps({"content": hit}))
         return _parsed({"done": True})
 
 
@@ -293,4 +353,128 @@ def test_missing_eval_py_is_teaching_error() -> None:
     with pytest.raises(ValueError, match="eval.py"):
         run_eval_sync(str(FIXTURES / "cluster_label.ctx"))
 
-    assert cli.main(["eval", str(FIXTURES / "cluster_label.ctx")]) == 2
+    assert cli.main(["eval", str(FIXTURES / "cluster_label.ctx")]) == 4
+
+
+def test_tool_loop_recovers_from_raising_tool() -> None:
+    # `search` is granted (tools.pyi) but unmocked in this sample -> it RAISES,
+    # the loop turns it into an error observation, and the controller recovers by
+    # calling the mocked `record_memory`. This is the Phase 3 acceptance case.
+    rich = load_rich_dotctx(str(FIXTURES / "execute_eval.ctx"), env={})
+    sample = Sample(
+        name="recovers",
+        input={"task": "store it"},
+        mock_tools={"record_memory": {"ok": True}},
+        stop_on=stop_after_turns(5),
+    )
+    result = run(_run_tool_loop(rich, sample, RecoveringFake()))
+
+    assert result["status"] == "done"
+    calls = [(e["ref"], bool(e.get("error"))) for e in result["trace"] if e["decision"] == "call"]
+    assert ("search", True) in calls  # the raising tool became an error observation
+    assert ("record_memory", False) in calls  # controller recovered on the next round
+
+
+def test_tool_loop_chains_prior_tool_result() -> None:
+    # search -> ["alice"]; the model must READ that observation out of the threaded
+    # transcript and record "alice". The record_memory mock only returns ok:True
+    # when it actually receives content=="alice", so a blind runner (finding #1)
+    # would record "none" and get ok:False.
+    rich = load_rich_dotctx(str(FIXTURES / "execute_eval.ctx"), env={})
+    sample = Sample(
+        name="chains",
+        input={"task": "find and store the person"},
+        mock_tools={
+            "search": ["alice"],
+            "record_memory": MockToolConfig(
+                match=[({"content": "alice"}, {"ok": True, "stored": "alice"})],
+                default={"ok": False},
+            ),
+        },
+        stop_on=stop_when_terminal_tool("record_memory"),
+    )
+    result = run(_run_tool_loop(rich, sample, SearchThenRecordFake()))
+
+    assert result["status"] == "done"
+    # StopFn 'done' output is the post-tool observation, not the tool_calls dict.
+    observations = result["output"]
+    assert isinstance(observations, list)
+    assert observations[0]["tool"] == "record_memory"
+    assert observations[0]["output"] == {"ok": True, "stored": "alice"}
+
+
+def test_stop_when_terminal_tool_output_is_the_observation() -> None:
+    # finding #4: the clean StopFn 'done' output must be the tool result, never the
+    # assistant tool-call reply dict.
+    rich = load_rich_dotctx(str(FIXTURES / "execute_eval.ctx"), env={})
+    sample = Sample(
+        name="terminal",
+        input={"task": "search"},
+        mock_tools={"search": ["hit"]},
+        stop_on=stop_when_terminal_tool("search"),
+    )
+    result = run(_run_tool_loop(rich, sample, AlwaysCallsFake("search", '{"query": "q"}')))
+
+    assert result["status"] == "done"
+    assert result["rounds"] == 1
+    assert result["output"] == [{"id": "c1", "tool": "search", "output": ["hit"]}]
+
+
+def test_stop_after_turns_collision_is_clean_done() -> None:
+    # finding #4: execute_eval.ctx has max_rounds=4; stop_after_turns(4) collides
+    # with it. The runner overrides max_rounds off the StopFn so the loop stops
+    # cleanly as 'done' at 4 turns instead of tripping the hard cap as 'max_rounds'.
+    rich = load_rich_dotctx(str(FIXTURES / "execute_eval.ctx"), env={})
+    assert rich.reasoner.max_rounds == 4
+    sample = Sample(
+        name="collision",
+        input={"task": "loop"},
+        mock_tools={"record_memory": {"ok": True}},
+        stop_on=stop_after_turns(4),
+    )
+    result = run(_run_tool_loop(rich, sample, AlwaysCallsFake("record_memory")))
+
+    assert result["status"] == "done"
+    assert result["rounds"] == 4
+
+
+def test_cli_unknown_env_teaches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # finding #2: inside a project a misspelled --env is a loud teaching error
+    # (exit 4), never a silent fallback to {}.
+    (tmp_path / "ca.toml").write_text(
+        '[env.staging]\n[env.staging.vars]\nSUMMARY_MODEL = "anthropic/x"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    code = cli.main(["eval", str(FIXTURES / "episode_summary.ctx"), "--env", "stagng"])
+    assert code == 4
+    err = capsys.readouterr().err
+    assert "unknown env" in err
+    assert "stagng" in err
+
+
+def test_cli_broken_eval_yaml_is_exit_4(tmp_path: Path) -> None:
+    # finding #3: a broken eval config exits 4 (setup error), not 2 (below
+    # threshold) — CI can tell a broken eval from a model regression.
+    ctx = tmp_path / "broken.ctx"
+    ctx.mkdir()
+    (ctx / "settings.yaml").write_text('model: "openai/gpt-eval@low"\n', encoding="utf-8")
+    (ctx / "prompt.j2").write_text(
+        "<<< role:system >>>\nHi.\n\n<<< role:user >>>\nT: {{ task | default('', true) }}\n",
+        encoding="utf-8",
+    )
+    (ctx / "eval.yaml").write_text(
+        "threshold: 0.5\nbogus_key: 1\n\ndatasets:\n  - file: eval.py\n    format: py\n",
+        encoding="utf-8",
+    )
+    (ctx / "eval.py").write_text(
+        "from dotctx.eval_types import Sample\n\n"
+        "def sample(limit: int = -1):\n"
+        "    return [Sample(name='s', input={'task': 'x'})]\n\n"
+        "def score(_input, _output, _expected):\n"
+        "    return 1.0\n",
+        encoding="utf-8",
+    )
+    assert cli.main(["eval", str(ctx)]) == 4
