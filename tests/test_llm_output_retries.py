@@ -54,6 +54,33 @@ def test_reask_carries_corrective_message() -> None:
     assert len(seen_messages[1]) == len(seen_messages[0]) + 1
 
 
+def test_usage_accumulates_across_reasks() -> None:
+    # Every attempt costs tokens; the meta must report all of them, not just
+    # the final completion's (codex PR #11 review).
+    replies = iter(["not json", '{"x": 2}'])
+
+    async def acompletion(**kwargs: Any) -> Any:
+        completion = _completion(next(replies))
+        completion.usage = SimpleNamespace(
+            prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        return completion
+
+    result = asyncio.run(complete_reasoner(_reasoner(1), "hi", acompletion=acompletion))
+    assert result.reply == {"x": 2}
+    assert result.meta.input_tokens == 20
+    assert result.meta.output_tokens == 10
+    assert result.meta.total_tokens == 30
+
+
+def test_usage_none_stays_none_when_no_attempt_reports() -> None:
+    async def acompletion(**kwargs: Any) -> Any:
+        return _completion('{"x": 2}')
+
+    result = asyncio.run(complete_reasoner(_reasoner(0), "hi", acompletion=acompletion))
+    assert result.meta.input_tokens is None
+    assert result.meta.total_tokens is None
+
+
 def test_zero_retries_is_single_call() -> None:
     calls = []
 

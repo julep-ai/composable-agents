@@ -49,6 +49,7 @@ from ..resilience import (
     OnAttempt,
     ResiliencePolicy,
     classify_error,
+    is_auth_error,
 )
 from .llm_result import AttemptMeta, LlmCallMeta, LlmResult
 
@@ -212,6 +213,14 @@ def _parse_reply(completion: Any, *, expect_json: bool) -> Any:
         return content
 
 
+def _add_tokens(a: int | None, b: int | None) -> int | None:
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a + b
+
+
 def _usage_of(completion: Any) -> tuple[int | None, int | None, int | None]:
     usage = getattr(completion, "usage", None)
     if usage is None:
@@ -297,8 +306,11 @@ async def complete_reasoner(
             try:
                 return await call(native=True, retry_note=retry_note)
             except Exception as exc:
-                if classify_error(exc) is ErrorClass.CONFIG:
-                    raise  # auth/config failure — fallback must never mask it
+                if is_auth_error(exc):
+                    raise  # auth failure — fallback must never mask it
+                # Broader CONFIG (400/422) is exactly how providers reject an
+                # unsupported response_format, so it falls through; a genuine
+                # bad request fails the reissue identically and raises there.
                 # Provider/any-llm could not honor response_format; reissue with
                 # the schema injected into the prompt — recorded, never silent
                 # (G-8). The latch records the first downgrade only and stops
@@ -312,6 +324,8 @@ async def complete_reasoner(
         return await call(native=False, retry_note=retry_note)
 
     completion = await dispatch_once()
+    # Usage accumulates over every attempt — re-asks cost tokens too.
+    pt, ct, tt = _usage_of(completion)
     reply = _parse_reply(completion, expect_json=schema is not None)
     while (
         schema is not None
@@ -329,9 +343,10 @@ async def complete_reasoner(
                 "the required schema. Reply again with ONLY the JSON object."
             )
         )
+        apt, act, att = _usage_of(completion)
+        pt, ct, tt = _add_tokens(pt, apt), _add_tokens(ct, act), _add_tokens(tt, att)
         reply = _parse_reply(completion, expect_json=True)
     ended = time.time()
-    pt, ct, tt = _usage_of(completion)
     meta = LlmCallMeta(
         served_model=_served_model_of(completion, model),
         provider=provider,

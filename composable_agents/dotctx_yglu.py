@@ -9,6 +9,14 @@ the swap is process-global and not thread-safe.
 
 Requires the ``composable-agents[yglu]`` extra; evaluating a tagged file
 without yglu is a hard, actionable error (G-8: no silent fallback).
+
+Deployed workers: ``$env`` never reads the ambient process environment — with
+no binding, tagged settings evaluate to their *defaults*. A Temporal worker
+that imports ``.ctx`` packages must call :func:`set_default_env` with the same
+env profile the artifact was frozen against (``ca.toml`` ``[env.<name>.vars]``)
+*before* those imports, or its registry can disagree with the frozen identity.
+Persisting the resolved reasoner config into the artifact (so workers need no
+manual binding) is deferred to the deployment phase.
 """
 from __future__ import annotations
 
@@ -19,11 +27,29 @@ from contextlib import contextmanager
 from typing import Any, Iterator, Mapping, Optional
 
 _TAG_RE = re.compile(r"!\?|!\(\)|!if\b|!for\b|!concat\b|!merge\b")
+_YGLU_TAG_SUFFIXES = frozenset({"?", "()", "if", "for", "concat", "merge"})
 _DEFAULT_ENV: Optional[Mapping[str, str]] = None
 
 
 def has_yglu_tags(text: str) -> bool:
-    return _TAG_RE.search(text) is not None
+    """True when ``text`` carries a yglu tag at an actual YAML tag position.
+
+    Detection is structural (scanner tokens), so punctuation inside scalars —
+    ``system: "Really!?"`` — is content, not a tag. Text the scanner rejects
+    falls back to the regex: an unscannable file fails to load either way, and
+    the tagged route reports the more useful error.
+    """
+    import yaml
+
+    try:
+        return any(
+            isinstance(token, yaml.TagToken)
+            and token.value[0] == "!"
+            and token.value[1] in _YGLU_TAG_SUFFIXES
+            for token in yaml.scan(text)
+        )
+    except yaml.YAMLError:
+        return _TAG_RE.search(text) is not None
 
 
 def set_default_env(env: Optional[Mapping[str, str]]) -> None:

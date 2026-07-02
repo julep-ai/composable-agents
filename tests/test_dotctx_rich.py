@@ -340,7 +340,11 @@ def test_complete_reasoner_uses_rendered_user_turn_and_max_tokens() -> None:
     ))
     assert out.reply == reply
     call = rec.calls[0]
-    assert call["max_tokens"] == 800 and call["temperature"] == 0.3
+    assert call["max_tokens"] == 800
+    # The @low effort survives rendering, so thinking is on and temperature
+    # is suppressed (mirrors the sync path's reasoning/temperature rule).
+    assert call["reasoning_effort"] == "low"
+    assert "temperature" not in call
     msgs = call["messages"]
     assert msgs[0]["role"] == "system"
     assert msgs[0]["content"] == "You are a careful research agent.\nPersona: skeptic"

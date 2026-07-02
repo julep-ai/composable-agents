@@ -50,6 +50,27 @@ def test_no_fallback_attr_on_clean_native() -> None:
     assert "llm.response_format_fallback" not in result.meta.to_attrs()
 
 
+def test_bad_request_on_response_format_still_falls_back() -> None:
+    # A provider rejecting only response_format surfaces as a 400; that must
+    # reach the prompt-injected fallback, not die as CONFIG (codex PR #11).
+    class BadRequest(Exception):
+        status_code = 400
+
+    calls: list[dict[str, Any]] = []
+
+    async def rejects_native(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        if "response_format" in kwargs:
+            raise BadRequest("response_format is not supported for this model")
+        return _completion('{"x": 1}')
+
+    r = Reasoner(name="t", model="openai:gpt-4o", reply=SCHEMA)
+    result = asyncio.run(complete_reasoner(r, "hi", acompletion=rejects_native))
+    assert result.reply == {"x": 1}
+    assert len(calls) == 2
+    assert result.meta.response_format_fallback is not None
+
+
 def test_config_error_not_masked_by_fallback() -> None:
     class AuthError(Exception):
         status_code = 401

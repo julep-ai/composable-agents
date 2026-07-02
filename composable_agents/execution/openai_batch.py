@@ -66,7 +66,12 @@ class OpenAIBatchProvider(BatchProvider):
             ),
             "max_tokens": reasoner.max_tokens or 1024,
         }
-        if reasoner.temperature is not None:
+        # Mirror the sync path (execution/llm.py): forward effort verbatim and
+        # omit temperature whenever reasoning is actually enabled.
+        effort = reasoner.reasoning_effort
+        if effort is not None:
+            body["reasoning_effort"] = effort
+        if reasoner.temperature is not None and (effort is None or effort == "none"):
             body["temperature"] = reasoner.temperature
         if schema is not None:
             body["response_format"] = _response_format(schema)

@@ -19,6 +19,28 @@ def test_has_yglu_tags() -> None:
     assert not has_yglu_tags("model: openai:gpt-4o\n")
 
 
+def test_has_yglu_tags_all_tag_forms() -> None:
+    assert has_yglu_tags("x: !() $_\n")
+    assert has_yglu_tags("x: !if cond\n")
+    assert has_yglu_tags("x: !for [1, 2]\n")
+    assert has_yglu_tags("x: !concat [a, b]\n")
+    assert has_yglu_tags("x: !merge [a, b]\n")
+
+
+def test_has_yglu_tags_ignores_punctuation_in_strings() -> None:
+    # `!?` inside a scalar is content, not a YAML tag (codex PR #11 review).
+    assert not has_yglu_tags('system: "Really!?"\n')
+    assert not has_yglu_tags("system: Really!? yes\n")
+    assert not has_yglu_tags('system: "ask this: !? verbatim"\n')
+
+
+def test_has_yglu_tags_unscannable_text_falls_back_to_regex() -> None:
+    # Broken YAML cannot be scanned; the regex fallback still routes tagged
+    # text to yglu (where load reports the real error).
+    assert has_yglu_tags('a: [unclosed\nb: !? $env.get("X", "y")\n')
+    assert not has_yglu_tags("a: [unclosed\nb: plain\n")
+
+
 def test_env_default_when_unset() -> None:
     pytest.importorskip("yglu")
     out = load_settings(SETTINGS, env={}, filepath="settings.yaml")
