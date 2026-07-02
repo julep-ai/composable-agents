@@ -15,7 +15,9 @@ one renderer per template — ``dotctx/<package>/<role>@v<content-hash-prefix>``
 covers prompt edits. The Reasoner carries only the renderer *names*
 (``system_render`` / ``user_render``); ``Reasoner.system`` stays ``""``.
 
-``eval.py`` / ``eval.yaml`` are a consumer-side contract and are ignored here.
+``eval.py`` / ``eval.yaml`` are a consumer-side contract and are never loaded
+here — :func:`composable_agents.dotctx_evals.load_ctx_evals` is the explicit
+entry point (loading a prompt must never execute eval code).
 Requires the ``composable-agents[dotctx]`` extra; importing this module without
 jinja2 is a hard error — a package that has a template and a loader that cannot
 render it must not fall back to a plain string (G-8).
