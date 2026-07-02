@@ -294,7 +294,9 @@ async def complete_reasoner(
             kwargs: dict[str, Any] = {"response_format": _response_format(schema)}
         elif native and json_object:
             # No schema to inject; the prompt self-instructs JSON. The
-            # non-native reissue below simply drops the kwarg.
+            # non-native reissue below simply drops the kwarg. Replies stay
+            # raw text either way — json_object constrains the provider, not
+            # CA parsing; callers own parsing (mem-mcp's use parse_llm_json).
             messages = _messages(
                 reasoner.system, value,
                 schema_hint=None, user_text=user_text, transcript=transcript,

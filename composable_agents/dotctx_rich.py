@@ -154,15 +154,42 @@ def _resolve_file_filter_path(path: str, base_dir: Optional[str]) -> Path:
     return file_path
 
 
-def _filter_import_yaml(path: str, base_dir: Optional[str]) -> Any:
+def _snapshot_key(path: str, base_dir: Optional[str]) -> str:
+    return os.path.normpath(str(_resolve_file_filter_path(path, base_dir)))
+
+
+def _snapshot_content(
+    path: str, base_dir: Optional[str], files: Mapping[str, str]
+) -> str:
+    """The captured bytes for a file-import filter arg — never a live read.
+
+    Rendering from anything but the load-time snapshot would let an on-disk
+    edit change the prompt behind an unchanged renderer hash. Only literal
+    ``'<path>' | import_yaml/import_text`` args are captured, so a variable
+    path (or a file missing at load) is a loud error here.
+    """
+    key = _snapshot_key(path, base_dir)
+    if key not in files:
+        raise ValueError(
+            f"import path {path!r} was not captured when the dotctx was "
+            "loaded; import_yaml/import_text support only literal string "
+            "paths to files that exist at load time"
+        )
+    return files[key]
+
+
+def _filter_import_yaml(
+    path: str, base_dir: Optional[str], files: Mapping[str, str]
+) -> Any:
     import yaml
 
-    with _resolve_file_filter_path(path, base_dir).open(encoding="utf-8") as fh:
-        return yaml.safe_load(fh)
+    return yaml.safe_load(_snapshot_content(path, base_dir, files))
 
 
-def _filter_import_text(path: str, base_dir: Optional[str]) -> str:
-    return _resolve_file_filter_path(path, base_dir).read_text(encoding="utf-8")
+def _filter_import_text(
+    path: str, base_dir: Optional[str], files: Mapping[str, str]
+) -> str:
+    return _snapshot_content(path, base_dir, files)
 
 
 def _encoding_for_model(model: str) -> Any:
@@ -199,7 +226,9 @@ def _filter_truncate_tokens(
     return cast(str, encoding.decode(tokens[:truncate_at])) + suffix
 
 
-def _memmcp_filters(base_dir: Optional[str]) -> dict[str, Callable[..., Any]]:
+def _memmcp_filters(
+    base_dir: Optional[str], files: Mapping[str, str]
+) -> dict[str, Callable[..., Any]]:
     return {
         "as_xml": _filter_as_xml,
         "as_codeblock": _filter_as_codeblock,
@@ -208,8 +237,8 @@ def _memmcp_filters(base_dir: Optional[str]) -> dict[str, Callable[..., Any]]:
         "count_tokens": _filter_count_tokens,
         "truncate_tokens": _filter_truncate_tokens,
         "dedent": textwrap.dedent,
-        "import_yaml": lambda p: _filter_import_yaml(p, base_dir),
-        "import_text": lambda p: _filter_import_text(p, base_dir),
+        "import_yaml": lambda p: _filter_import_yaml(p, base_dir, files),
+        "import_text": lambda p: _filter_import_text(p, base_dir, files),
         "to_json": _filter_to_json,
         "from_json": json.loads,
     }
@@ -219,18 +248,25 @@ def _memmcp_filters(base_dir: Optional[str]) -> dict[str, Callable[..., Any]]:
 # Templates -> registered renderers.
 # --------------------------------------------------------------------------- #
 def _template_renderer(
-    package: str, role: str, source: str, base_dir: Optional[str]
+    package: str,
+    role: str,
+    source: str,
+    base_dir: Optional[str],
+    templates: Mapping[str, str],
+    files: Mapping[str, str],
 ) -> Callable[[Mapping[str, Any]], str]:
-    loader = jinja2.FileSystemLoader(base_dir) if base_dir is not None else None
+    # Includes and file imports are served from the load-time snapshot that
+    # the renderer hash covers — never the live filesystem — so a dep edit
+    # after load cannot change the prompt behind an unchanged hash.
     env = jinja2.Environment(
-        loader=loader,
+        loader=jinja2.DictLoader(dict(templates)),
         extensions=["jinja2.ext.loopcontrols"],
         undefined=jinja2.StrictUndefined,
         keep_trailing_newline=True,
         trim_blocks=True,
         lstrip_blocks=True,
     )
-    env.filters.update(_memmcp_filters(base_dir))
+    env.filters.update(_memmcp_filters(base_dir, files))
     template = env.from_string(source)
 
     def render(ctx: Mapping[str, Any]) -> str:
@@ -270,50 +306,72 @@ def _read_dependency(path: Path) -> str:
         return f"<missing: {exc}>"
 
 
+@dataclass(frozen=True)
+class _Dependency:
+    """One captured include/import: hash label + render-time snapshot key."""
+
+    kind: str        # "template" | "import_yaml" | "import_text"
+    ref: str         # as written in the template: loader name / filter arg
+    rel: str         # base_dir-relative label used in the hashed bundle
+    content: str     # captured bytes ("<missing: ...>" sentinel when absent)
+    exists: bool
+
+
 def _template_dependencies(
     source: str,
     base_dir: Optional[str],
-    seen: Optional[set[str]] = None,
-) -> list[tuple[str, str, str]]:
+    seen: Optional[set[tuple[str, str]]] = None,
+) -> list[_Dependency]:
     if base_dir is None:
         return []
-    seen = seen if seen is not None else set()
-    deps: list[tuple[str, str, str]] = []
+    seen = seen if seen is not None else set()  # of (kind-scope, resolved path)
+    deps: list[_Dependency] = []
 
     parsed = jinja2.Environment(extensions=["jinja2.ext.loopcontrols"]).parse(source)
     for ref in jinja2_meta.find_referenced_templates(parsed):
         if ref is None:
-            deps.append(("template", "<dynamic>", ""))
-            continue
+            # A computed include target can't be hashed or snapshotted; a live
+            # read at render time would bypass drift detection entirely.
+            raise ValueError(
+                "dotctx template uses a dynamic include/import target; "
+                "include/import/extends must name a literal template path so "
+                "it can be captured into the renderer hash"
+            )
         path = _dependency_path(base_dir, ref)
-        key = str(path.resolve()) if path.exists() else str(path)
+        # Dedup is kind-qualified: the same file may be both included as a
+        # template and read via an import filter, and each use needs its own
+        # snapshot entry.
+        key = ("template", str(path.resolve()) if path.exists() else str(path))
         if key in seen:
             continue
         seen.add(key)
         content = _read_dependency(path)
-        rel = _rel_dependency(path, base_dir)
-        deps.append(("template", rel, content))
+        deps.append(_Dependency(
+            "template", ref, _rel_dependency(path, base_dir), content, path.exists(),
+        ))
         deps.extend(_template_dependencies(content, base_dir, seen))
 
     for match in _IMPORT_FILE_FILTER_RE.finditer(source):
         ref = match.group("path")
         path = _dependency_path(base_dir, ref)
-        key = str(path.resolve()) if path.exists() else str(path)
+        key = ("import", str(path.resolve()) if path.exists() else str(path))
         if key in seen:
             continue
         seen.add(key)
-        deps.append((match.group("filter"), _rel_dependency(path, base_dir), _read_dependency(path)))
+        deps.append(_Dependency(
+            match.group("filter"), ref, _rel_dependency(path, base_dir),
+            _read_dependency(path), path.exists(),
+        ))
 
     return deps
 
 
-def _source_with_dependencies(source: str, base_dir: Optional[str]) -> str:
-    deps = _template_dependencies(source, base_dir)
+def _source_with_dependencies(source: str, deps: Sequence[_Dependency]) -> str:
     if not deps:
         return source
     chunks = [source, "\n\n# dotctx dependency bundle\n"]
-    for kind, rel, content in deps:
-        chunks.append(f"\n# {kind}: {rel}\n{content}")
+    for dep in deps:
+        chunks.append(f"\n# {dep.kind}: {dep.rel}\n{dep.content}")
     return "".join(chunks)
 
 
@@ -325,13 +383,24 @@ def _register_template(
     *,
     base_dir: Optional[str],
 ) -> str:
-    source_for_hash = _source_with_dependencies(source, base_dir)
+    deps = _template_dependencies(source, base_dir)
+    source_for_hash = _source_with_dependencies(source, deps)
+    # The renderer serves includes/imports from this same captured set, so the
+    # hash and the rendered prompt can never disagree. Missing files stay out:
+    # a missing include keeps raising TemplateNotFound at render.
+    templates = {
+        d.ref: d.content for d in deps if d.kind == "template" and d.exists
+    }
+    files = {
+        _snapshot_key(d.ref, base_dir): d.content
+        for d in deps if d.kind in ("import_yaml", "import_text") and d.exists
+    }
     digest = hashlib.sha256(source_for_hash.encode("utf-8")).hexdigest()
     name = f"dotctx/{package}/{role}@v{digest[:_HASH_PREFIX_LEN]}"
     if name not in registry.renderers:  # same name => same content; reload is a no-op
         registry.register_renderer(
             name,
-            _template_renderer(package, role, source, base_dir),
+            _template_renderer(package, role, source, base_dir, templates, files),
             source=source_for_hash,
         )
     return name

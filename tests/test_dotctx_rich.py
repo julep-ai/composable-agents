@@ -351,6 +351,63 @@ def test_memmcp_includes_and_file_filters_render_from_shared_root(tmp_path: Path
     )
 
 
+def test_dependency_edits_after_load_do_not_change_render(tmp_path: Path) -> None:
+    # The renderer identity hashes include/import deps at load; rendering must
+    # use that same captured snapshot, or an on-disk edit after load would
+    # change the prompt behind an unchanged hash (codex PR #12 P1).
+    partials = tmp_path / "partials"
+    partials.mkdir()
+    (partials / "preamble.j2").write_text("Project: {{ project }}\n")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "facts.yaml").write_text("items:\n  - alpha\n")
+    pkg = _write_pkg(
+        tmp_path, "snapshot.ctx", "name: markers.snapshot\nmodel: m\n",
+        {
+            "prompt.j2": (
+                "<<< role:system >>>\n"
+                "{% include 'partials/preamble.j2' %}"
+                "{% set facts = 'data/facts.yaml' | import_yaml %}"
+                "{{ facts['items'] | bulleted_list }}"
+            )
+        },
+    )
+    rich = load_rich_dotctx(str(pkg))
+    render = get_renderer(rich.renderer_names["system"])
+    before = render({"project": "Atlas"})
+
+    (partials / "preamble.j2").write_text("EDITED {{ project }}\n")
+    (data_dir / "facts.yaml").write_text("items:\n  - edited\n")
+
+    assert render({"project": "Atlas"}) == before == "Project: Atlas\n- alpha"
+
+
+def test_dynamic_include_rejected_at_load(tmp_path: Path) -> None:
+    # A non-literal include target can't be snapshotted or hashed, so it would
+    # reopen the live-filesystem drift hole; refuse it loudly at load.
+    pkg = _write_pkg(
+        tmp_path, "dynamic.ctx", "name: markers.dynamic\nmodel: m\n",
+        {"prompt.j2": "<<< role:system >>>\n{% include which %}"},
+    )
+    with pytest.raises(ValueError, match="dynamic"):
+        load_rich_dotctx(str(pkg))
+
+
+def test_variable_path_import_filter_is_render_time_error(tmp_path: Path) -> None:
+    # Only literal '<path>' | import_yaml/import_text args are captured into
+    # the snapshot; a variable path must not silently read the live filesystem.
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "facts.yaml").write_text("items: []\n")
+    pkg = _write_pkg(
+        tmp_path, "varpath.ctx", "name: markers.varpath\nmodel: m\n",
+        {"prompt.j2": "<<< role:system >>>\n{% set p = 'data' + '/facts.yaml' %}{{ p | import_yaml }}"},
+    )
+    rich = load_rich_dotctx(str(pkg))
+    with pytest.raises(ValueError, match="captured"):
+        get_renderer(rich.renderer_names["system"])({})
+
+
 def test_included_file_changes_renderer_name_and_hash(tmp_path: Path) -> None:
     from composable_agents.registry import Registry
 

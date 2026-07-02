@@ -104,6 +104,19 @@ def test_json_object_kwarg_sent_without_schema() -> None:
     assert result.meta.response_format_fallback is None
 
 
+def test_json_object_reply_stays_raw_text() -> None:
+    # mem-mcp-faithful semantics (codex PR #12 review): json_object constrains
+    # the *provider*, not CA's parsing — callers parse, as mem-mcp's do with
+    # parse_llm_json. Only reply_schema opts into dict replies.
+    async def ok(**kwargs: Any) -> Any:
+        return _completion('{"x": 1}')
+
+    r = Reasoner(name="t", model="openai:gpt-4o", response_format="json_object")
+    result = asyncio.run(complete_reasoner(r, "hi", acompletion=ok))
+    assert result.reply == '{"x": 1}'
+    assert isinstance(result.reply, str)
+
+
 def test_json_object_fallback_reissues_without_kwarg_and_records() -> None:
     calls: list[dict[str, Any]] = []
 
