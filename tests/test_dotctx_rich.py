@@ -175,6 +175,131 @@ def test_rich_dotctx_reasoner_lands_in_supplied_registry(tmp_path: Path) -> None
 
 
 # --------------------------------------------------------------------------- #
+# Role-marker splitting: <<< role:... >>> in prompt.j2 (mem-mcp single-file
+# multi-message format). Real shape mirrors episode_summary.ctx/prompt.j2:
+# jinja-comment header, a system section, then a user section whose body uses
+# bare <<< / >>> heredoc delimiters that must NOT be treated as markers.
+# --------------------------------------------------------------------------- #
+_ROLE_MARKER_PROMPT = (
+    "{# AI-ANCHOR: prompt: episode summary prompt #}\n"
+    "<<< role:system >>>\n"
+    "You are an episodic summarizer.\n"
+    "Persona: {{ persona }}\n"
+    "\n"
+    "<<< role:user >>>\n"
+    "Input\n"
+    "<<<\n"
+    "{{ question }}\n"
+    ">>>\n"
+)
+
+
+def test_role_markers_split_prompt_into_system_and_user(tmp_path: Path) -> None:
+    pkg = _write_pkg(
+        tmp_path, "markers.ctx", "name: markers.split\nmodel: m\n",
+        {"prompt.j2": _ROLE_MARKER_PROMPT},
+    )
+    rich = load_rich_dotctx(str(pkg))
+    b = rich.reasoner
+    assert b.system_render is not None and b.user_render is not None
+    assert set(rich.renderer_names) == {"system", "user"}
+    # jinja comment header is preserved in the system source (hash covers it)
+    # but renders to nothing; section bodies are stripped like mem-mcp does.
+    system = get_renderer(b.system_render)({"persona": "skeptic"})
+    assert system == "You are an episodic summarizer.\nPersona: skeptic"
+    user = get_renderer(b.user_render)({"question": "why?"})
+    assert user == "Input\n<<<\nwhy?\n>>>"
+
+
+def test_role_markers_render_with_strict_undefined(tmp_path: Path) -> None:
+    pkg = _write_pkg(
+        tmp_path, "markers_strict.ctx", "name: markers.strict\nmodel: m\n",
+        {"prompt.j2": _ROLE_MARKER_PROMPT},
+    )
+    rich = load_rich_dotctx(str(pkg))
+    with pytest.raises(ValueError, match=r"markers\.strict.*user template.*question"):
+        get_renderer(rich.renderer_names["user"])({"persona": "no question here"})
+
+
+def test_role_markers_tight_spacing_matches(tmp_path: Path) -> None:
+    pkg = _write_pkg(
+        tmp_path, "markers_tight.ctx", "name: markers.tight\nmodel: m\n",
+        {"prompt.j2": "<<<role:system>>>\nS {{ x }}\n<<<role:user>>>\nU {{ y }}\n"},
+    )
+    rich = load_rich_dotctx(str(pkg))
+    assert get_renderer(rich.renderer_names["system"])({"x": "1"}) == "S 1"
+    assert get_renderer(rich.renderer_names["user"])({"y": "2"}) == "U 2"
+
+
+def test_role_markers_system_only(tmp_path: Path) -> None:
+    pkg = _write_pkg(
+        tmp_path, "markers_sysonly.ctx", "name: markers.sysonly\nmodel: m\n",
+        {"prompt.j2": "<<< role:system >>>\nJust a system prompt.\n"},
+    )
+    b = load_rich_dotctx(str(pkg)).reasoner
+    assert b.system_render is not None and b.user_render is None
+    assert get_renderer(b.system_render)({}) == "Just a system prompt."
+
+
+def test_role_markers_unknown_role_errors(tmp_path: Path) -> None:
+    pkg = _write_pkg(
+        tmp_path, "markers_badrole.ctx", "name: markers.badrole\nmodel: m\n",
+        {"prompt.j2": "<<< role:system >>>\ns\n<<< role:assistant >>>\na\n"},
+    )
+    with pytest.raises(ValueError, match=r"prompt\.j2.*'assistant'"):
+        load_rich_dotctx(str(pkg))
+
+
+def test_role_markers_duplicate_system_errors(tmp_path: Path) -> None:
+    pkg = _write_pkg(
+        tmp_path, "markers_dupsys.ctx", "name: markers.dupsys\nmodel: m\n",
+        {"prompt.j2": "<<< role:system >>>\na\n<<< role:system >>>\nb\n"},
+    )
+    with pytest.raises(ValueError, match=r"prompt\.j2.*'system'"):
+        load_rich_dotctx(str(pkg))
+
+
+def test_role_markers_user_before_system_errors(tmp_path: Path) -> None:
+    pkg = _write_pkg(
+        tmp_path, "markers_userfirst.ctx", "name: markers.userfirst\nmodel: m\n",
+        {"prompt.j2": "<<< role:user >>>\nu\n<<< role:system >>>\ns\n"},
+    )
+    with pytest.raises(ValueError, match=r"prompt\.j2.*'user'"):
+        load_rich_dotctx(str(pkg))
+
+
+def test_role_markers_third_section_errors(tmp_path: Path) -> None:
+    pkg = _write_pkg(
+        tmp_path, "markers_three.ctx", "name: markers.three\nmodel: m\n",
+        {"prompt.j2": "<<< role:system >>>\ns\n<<< role:user >>>\nu\n<<< role:user >>>\nu2\n"},
+    )
+    with pytest.raises(ValueError, match=r"prompt\.j2.*'user'"):
+        load_rich_dotctx(str(pkg))
+
+
+def test_role_markers_leading_noncomment_text_errors(tmp_path: Path) -> None:
+    pkg = _write_pkg(
+        tmp_path, "markers_leading.ctx", "name: markers.leading\nmodel: m\n",
+        {"prompt.j2": "stray prose\n<<< role:system >>>\ns\n"},
+    )
+    with pytest.raises(ValueError, match=r"prompt\.j2.*before the first"):
+        load_rich_dotctx(str(pkg))
+
+
+def test_prompt_without_role_markers_stays_whole_system_template(tmp_path: Path) -> None:
+    # Bare <<< / >>> lines (no role:) are content, not markers: the whole file
+    # remains the system template exactly as before.
+    pkg = _write_pkg(
+        tmp_path, "markers_none.ctx", "name: markers.none\nmodel: m\n",
+        {"prompt.j2": "Input\n<<<\n{{ text }}\n>>>\n"},
+    )
+    b = load_rich_dotctx(str(pkg)).reasoner
+    assert b.user_render is None
+    assert b.system_render is not None
+    assert get_renderer(b.system_render)({"text": "T"}) == "Input\n<<<\nT\n>>>"
+
+
+# --------------------------------------------------------------------------- #
 # Rejections.
 # --------------------------------------------------------------------------- #
 def test_unknown_settings_keys_error(tmp_path: Path) -> None:

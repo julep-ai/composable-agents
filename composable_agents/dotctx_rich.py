@@ -1,7 +1,9 @@
 """The rich dotctx layout (design: docs/design/dotctx-rich-format.md).
 
 A rich ``.ctx`` package grows the minimal layout with Jinja2 templates
-(``prompt.j2`` or a ``messages/`` bundle of one system + one user message),
+(``prompt.j2`` — optionally split into system/user sections by mem-mcp's
+``<<< role:... >>>`` markers — or a ``messages/`` bundle of one system + one
+user message),
 ``schema.pyi`` (an ``Output`` stub compiled to JSON Schema ->
 ``Reasoner.reply_schema``) and ``tools.pyi`` (tool stubs -> granted toolref keys +
 expected input schemas, verified at freeze as ``TOOL_SCHEMA_DRIFT``).
@@ -123,6 +125,61 @@ def _register_template(registry: Registry, package: str, role: str, source: str)
     return name
 
 
+# mem-mcp's single-file multi-message format: <<< role:name >>> markers split a
+# template into per-role sections (loader.py ROLE_MARKER_PATTERN). Spacing is
+# flexible — <<<role:system>>> matches too — but bare <<< / >>> heredoc
+# delimiters in prompt bodies do not (no ``role:``).
+_ROLE_MARKER_RE = re.compile(r"<<<\s*role:(\w+)\s*>>>")
+_JINJA_COMMENT_RE = re.compile(r"\{#.*?#\}", re.DOTALL)
+
+
+def _split_role_markers(source: str, origin: str) -> Optional[tuple[str, Optional[str]]]:
+    """Split ``<<< role:... >>>`` markers into (system source, user source).
+
+    Returns ``None`` when the source has no markers (whole file stays the
+    system template). v1 accepts exactly the shapes a ``messages/`` bundle
+    accepts: one system section optionally followed by one user section;
+    anything else is rejected loudly with the file name and offending role.
+    Content before the first marker must be whitespace or Jinja comments only;
+    it is prepended to the system section source so headers like
+    ``{# AI-ANCHOR #}`` stay in the hashed template while rendering to nothing.
+    """
+    parts = _ROLE_MARKER_RE.split(source)
+    if len(parts) == 1:
+        return None
+
+    pre = parts[0]
+    if _JINJA_COMMENT_RE.sub("", pre).strip():
+        raise ValueError(
+            f"dotctx template {origin!r} has content before the first "
+            "<<< role:... >>> marker; only whitespace or Jinja comments "
+            "({# ... #}) may precede it"
+        )
+
+    # parts: [pre, role1, content1, role2, content2, ...]; contents stripped
+    # like mem-mcp's _parse_role_markers.
+    sections = list(zip(parts[1::2], (c.strip() for c in parts[2::2]), strict=True))
+    expected = ("system", "user")
+    for (role, _), want in zip(sections, expected, strict=False):
+        if role != want:
+            raise ValueError(
+                f"dotctx template {origin!r} has role marker {role!r} where "
+                f"{want!r} was expected; v1 accepts one system section "
+                "optionally followed by one user section"
+            )
+    if len(sections) > 2:
+        raise ValueError(
+            f"dotctx template {origin!r} has extra role marker "
+            f"{sections[2][0]!r}; v1 accepts one system section optionally "
+            "followed by one user section"
+        )
+
+    header = pre.strip()
+    system = f"{header}{sections[0][1]}" if header else sections[0][1]
+    user = sections[1][1] if len(sections) == 2 else None
+    return system, user
+
+
 def _read_messages(messages_dir: str) -> tuple[Optional[str], Optional[str]]:
     """Parse a ``messages/`` bundle into (system body, user body).
 
@@ -178,7 +235,11 @@ def _read_templates(path: str) -> tuple[Optional[str], Optional[str]]:
         raise ValueError(f"dotctx package {path!r} has both prompt.j2 and messages/; pick one")
     if has_prompt:
         with open(prompt_path, "r", encoding="utf-8") as fh:
-            return fh.read(), None
+            source = fh.read()
+        split = _split_role_markers(source, prompt_path)
+        if split is not None:
+            return split
+        return source, None
     if has_messages:
         return _read_messages(messages_dir)
     return None, None
