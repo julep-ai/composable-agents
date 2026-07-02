@@ -302,17 +302,32 @@ def is_rich_dotctx(path: str) -> bool:
 
 
 def load_dotctx(path: str, *, env: Optional[Mapping[str, str]] = None) -> Reasoner:
-    """Read ``<path>/settings.yaml`` (or ``settings.yml``) into a Reasoner.
+    """Read a dotctx directory — or a single ``.ctx`` file — into a Reasoner.
 
-    The reasoner's name defaults to the directory name when ``settings.yaml`` omits
+    A directory reads ``<path>/settings.yaml`` (or ``settings.yml``); the
+    reasoner's name defaults to the directory name when ``settings.yaml`` omits
     one, so a dotctx at ``reasoners/planner/`` registers as ``planner``. Packages
     carrying rich-layout files (``prompt.j2``, ``messages/``, ``schema.pyi``,
     ``tools.pyi``) are loaded by :mod:`composable_agents.dotctx_rich`.
+
+    A *file* path is mem-mcp's single-file format (YAML frontmatter + Jinja
+    body, ``dotctx_rich.load_single_file_dotctx``); it must end in ``.ctx`` and
+    always needs the ``[dotctx]`` extra — the body is a template. The reasoner
+    name defaults to the filename stem without ``.ctx``.
 
     Settings carrying yglu expressions (``!? $env.get(...)``) are evaluated by
     :mod:`composable_agents.dotctx_yglu` against exactly ``env`` (or the
     module-level default the CLI sets) — never the ambient process environment.
     """
+    if os.path.isfile(path):
+        if not path.endswith(".ctx"):
+            raise ValueError(f"single-file dotctx must end in .ctx: {path!r}")
+        from . import dotctx_rich  # hard ImportError without the [dotctx] extra
+
+        return dotctx_rich.load_single_file_dotctx(path, env=env).reasoner
+    if not os.path.isdir(path):
+        raise FileNotFoundError(f"dotctx path does not exist: {path!r}")
+
     if is_rich_dotctx(path):
         from . import dotctx_rich  # hard ImportError without the [dotctx] extra
 

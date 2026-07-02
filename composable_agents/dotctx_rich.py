@@ -657,29 +657,148 @@ def parse_tools_pyi(source: str) -> tuple[Optional[str], list[ToolStub]]:
 # --------------------------------------------------------------------------- #
 # The loader.
 # --------------------------------------------------------------------------- #
-def _read_settings(path: str, *, env: Optional[Mapping[str, str]] = None) -> dict[str, Any]:
+def _parse_settings_text(
+    text: str, *, env: Optional[Mapping[str, str]], origin: str
+) -> dict[str, Any]:
+    """Yglu-aware settings-text parsing shared by ``settings.yaml`` and
+    single-file frontmatter (same gating, same explicit ``env`` binding)."""
     from .dotctx_yglu import has_yglu_tags, load_settings as load_yglu_settings
 
+    if has_yglu_tags(text):
+        loaded = load_yglu_settings(text, env=env, filepath=origin)
+    else:
+        import yaml
+
+        loaded = yaml.safe_load(text) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"dotctx settings must be a YAML mapping: {origin!r}")
+    return loaded
+
+
+def _read_settings(path: str, *, env: Optional[Mapping[str, str]] = None) -> dict[str, Any]:
     for fn in ("settings.yaml", "settings.yml"):
         cand = os.path.join(path, fn)
         if os.path.exists(cand):
             with open(cand, "r", encoding="utf-8") as fh:
                 text = fh.read()
-            if has_yglu_tags(text):
-                loaded = load_yglu_settings(text, env=env, filepath=cand)
-            else:
-                import yaml
-
-                loaded = yaml.safe_load(text) or {}
-            if not isinstance(loaded, dict):
-                raise ValueError(f"dotctx settings must be a YAML mapping: {cand!r}")
-            return loaded
+            return _parse_settings_text(text, env=env, origin=cand)
     raise FileNotFoundError(f"no settings.yaml in dotctx dir: {path!r}")
+
+
+def _validate_settings_keys(settings: Mapping[str, Any], origin: str) -> None:
+    unknown = sorted(set(settings) - _ALLOWED_SETTINGS)
+    if unknown:
+        raise ValueError(
+            f"unknown settings keys in {origin!r}: {', '.join(unknown)} "
+            f"(allowed: {', '.join(sorted(_ALLOWED_SETTINGS))})"
+        )
 
 
 def _default_name(path: str) -> str:
     base = os.path.basename(os.path.normpath(path))
     return base[:-4] if base.endswith(".ctx") else base
+
+
+def _register_role_templates(
+    registry: Registry, package: str, system_src: Optional[str], user_src: Optional[str]
+) -> dict[str, str]:
+    renderer_names: dict[str, str] = {}
+    if system_src is not None:
+        renderer_names["system"] = _register_template(registry, package, "system", system_src)
+    if user_src is not None:
+        renderer_names["user"] = _register_template(registry, package, "user", user_src)
+    return renderer_names
+
+
+def _build_reasoner(
+    package: str,
+    settings: Mapping[str, Any],
+    *,
+    reply: Optional[dict[str, Any]],
+    tools: tuple[str, ...],
+    system_render: Optional[str],
+    user_render: Optional[str],
+) -> Reasoner:
+    scope = ContextScope(settings["context"]) if settings.get("context") else ContextScope.LOCAL
+    model, effort, output_retries = _model_and_effort(dict(settings))
+    return Reasoner(
+        name=package,
+        model=model,
+        system="",
+        reply=reply,
+        tools=tools,
+        temperature=settings.get("temperature"),
+        max_rounds=settings.get("max_rounds") or settings.get("maxRounds"),
+        is_agent=bool(settings.get("agent", False)),
+        sub_contract=_sub_from(settings.get("sub")),
+        context_scope=scope,
+        system_render=system_render,
+        user_render=user_render,
+        max_tokens=settings.get("max_tokens") or settings.get("maxTokens"),
+        reasoning_effort=effort,
+        output_retries=output_retries,
+    )
+
+
+# mem-mcp's single-file format: YAML frontmatter between --- delimiters, then
+# the template body (loader.py FRONTMATTER_PATTERN). No match => no settings.
+_FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.DOTALL)
+
+
+def load_single_file_dotctx(
+    path: str,
+    *,
+    registry: Registry = DEFAULT_REGISTRY,
+    env: Optional[Mapping[str, str]] = None,
+) -> RichDotctx:
+    """Load a single-file ``.ctx``: YAML frontmatter + Jinja template body.
+
+    The frontmatter goes through the same Yglu-aware settings path (and the
+    same unknown-key validation) as ``settings.yaml``; the body through the
+    same ``<<< role:... >>>`` splitting as ``prompt.j2``. A file without
+    frontmatter is all template — settings are empty and CA's defaults apply.
+    Nothing else can ride along in one file, so ``reply_schema`` stays ``None``
+    and tools come from the frontmatter only.
+    """
+    if not path.endswith(".ctx"):
+        raise ValueError(f"single-file dotctx must end in .ctx: {path!r}")
+    with open(path, "r", encoding="utf-8") as fh:
+        content = fh.read()
+
+    match = _FRONTMATTER_RE.match(content)
+    if match:
+        settings = _parse_settings_text(match.group(1), env=env, origin=path)
+        body = match.group(2)
+    else:
+        settings, body = {}, content
+    _validate_settings_keys(settings, path)
+
+    raw_name = settings.get("name")
+    package = raw_name if isinstance(raw_name, str) and raw_name else _default_name(path)
+
+    split = _split_role_markers(body, path)
+    system_src, user_src = split if split is not None else (body, None)
+    renderer_names = _register_role_templates(registry, package, system_src, user_src)
+
+    settings_tools: Sequence[Any] = settings.get("tools") or ()
+    reasoner = _build_reasoner(
+        package,
+        settings,
+        reply=None,
+        tools=tuple(dict.fromkeys(str(t) for t in settings_tools)),
+        system_render=renderer_names.get("system"),
+        user_render=renderer_names.get("user"),
+    )
+    reasoner = registry.register_reasoner(reasoner)
+
+    return RichDotctx(
+        reasoner=reasoner,
+        path=path,
+        package=package,
+        renderer_names=renderer_names,
+        tool_grants=(),
+        expected_tool_schemas={},
+    )
 
 
 def load_rich_dotctx(
@@ -688,28 +807,23 @@ def load_rich_dotctx(
     registry: Registry = DEFAULT_REGISTRY,
     env: Optional[Mapping[str, str]] = None,
 ) -> RichDotctx:
-    """Load a rich ``.ctx`` package: register renderers, reasoner, expectations."""
+    """Load a rich ``.ctx`` package: register renderers, reasoner, expectations.
+
+    A ``path`` that is a *file* is the single-file frontmatter+body format and
+    dispatches to :func:`load_single_file_dotctx`; directories keep the full
+    layout below.
+    """
+    if os.path.isfile(path):
+        return load_single_file_dotctx(path, registry=registry, env=env)
+
     settings = _read_settings(path, env=env)
-    unknown = sorted(set(settings) - _ALLOWED_SETTINGS)
-    if unknown:
-        raise ValueError(
-            f"unknown settings keys in {path!r}: {', '.join(unknown)} "
-            f"(allowed: {', '.join(sorted(_ALLOWED_SETTINGS))})"
-        )
+    _validate_settings_keys(settings, path)
 
     raw_name = settings.get("name")
     package = raw_name if isinstance(raw_name, str) and raw_name else _default_name(path)
 
     system_src, user_src = _read_templates(path)
-    renderer_names: dict[str, str] = {}
-    system_render: Optional[str] = None
-    user_render: Optional[str] = None
-    if system_src is not None:
-        system_render = _register_template(registry, package, "system", system_src)
-        renderer_names["system"] = system_render
-    if user_src is not None:
-        user_render = _register_template(registry, package, "user", user_src)
-        renderer_names["user"] = user_render
+    renderer_names = _register_role_templates(registry, package, system_src, user_src)
 
     reply_schema: Optional[dict[str, Any]] = None
     schema_path = os.path.join(path, "schema.pyi")
@@ -734,24 +848,13 @@ def load_rich_dotctx(
     settings_tools: Sequence[Any] = settings.get("tools") or ()
     tools = tuple(dict.fromkeys([*(str(t) for t in settings_tools), *tool_keys]))
 
-    scope = ContextScope(settings["context"]) if settings.get("context") else ContextScope.LOCAL
-    model, effort, output_retries = _model_and_effort(settings)
-    reasoner = Reasoner(
-        name=package,
-        model=model,
-        system="",
+    reasoner = _build_reasoner(
+        package,
+        settings,
         reply=reply_schema,
         tools=tools,
-        temperature=settings.get("temperature"),
-        max_rounds=settings.get("max_rounds") or settings.get("maxRounds"),
-        is_agent=bool(settings.get("agent", False)),
-        sub_contract=_sub_from(settings.get("sub")),
-        context_scope=scope,
-        system_render=system_render,
-        user_render=user_render,
-        max_tokens=settings.get("max_tokens") or settings.get("maxTokens"),
-        reasoning_effort=effort,
-        output_retries=output_retries,
+        system_render=renderer_names.get("system"),
+        user_render=renderer_names.get("user"),
     )
     reasoner = registry.register_reasoner(reasoner)
 
@@ -769,6 +872,7 @@ __all__ = [
     "RichDotctx",
     "ToolStub",
     "load_rich_dotctx",
+    "load_single_file_dotctx",
     "parse_schema_pyi",
     "parse_tools_pyi",
 ]
