@@ -59,6 +59,7 @@ class Decision(str, Enum):
     FINISH = "finish"      # done: payload is the final output
     ESCALATE = "escalate"  # give up to a human/parent: payload is a reason
     CALL = "call"          # invoke a granted tool: payload is {"tool", "input"}
+    CALL_MANY = "call_many"  # invoke granted tools: payload is [{"id", "tool", "input"}, ...]
     SUB = "sub"            # invoke a registered sub-flow: payload is {"ref", "input", "shape"?}
     CONTROLLER_ERROR = "controller_error"  # malformed controller output
 
@@ -83,7 +84,9 @@ class RoundAction:
         return self.decision in (Decision.FINISH, Decision.ESCALATE, Decision.CONTROLLER_ERROR)
 
 
-def interpret_reasoner_reply(reply: Any, *, strict: bool = True) -> RoundAction:
+def interpret_reasoner_reply(
+    reply: Any, *, strict: bool = True, native_tools: bool = False
+) -> RoundAction:
     """Map a controller's structured reply to a :class:`RoundAction`.
 
     Accepts the small, closed action vocabulary the loop supports. In strict
@@ -100,6 +103,23 @@ def interpret_reasoner_reply(reply: Any, *, strict: bool = True) -> RoundAction:
 
     if not isinstance(reply, dict):
         return malformed()
+
+    if native_tools and "tool_calls" in reply:
+        entries = reply["tool_calls"]
+        if not isinstance(entries, list) or not entries:
+            return malformed()
+        calls: list[dict[str, Any]] = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("tool"), str):
+                return malformed()
+            calls.append(
+                {
+                    "id": entry.get("id"),
+                    "tool": entry["tool"],
+                    "input": entry.get("input"),
+                }
+            )
+        return RoundAction(Decision.CALL_MANY, calls)
 
     # Finish: explicit done flag, or a bare {"output": ...}.
     if reply.get("done") is True or ("output" in reply and "tool" not in reply and "sub" not in reply):
@@ -133,6 +153,8 @@ def action_cost(action: RoundAction, reported: Optional[float] = None) -> float:
         return float(reported)
     if action.decision is Decision.CALL:
         return DEFAULT_TOOL_COST
+    if action.decision is Decision.CALL_MANY:
+        return DEFAULT_TOOL_COST * len(action.payload)
     if action.decision is Decision.SUB:
         return DEFAULT_SUB_COST
     return 0.0
@@ -167,6 +189,7 @@ class AgentConfig:
     # the controller's rounds, and the named summarizer reasoner for SUMMARY scope.
     ctx: Optional[ContextPolicy] = None
     summarizer: Optional[str] = None
+    native_tools: bool = False
 
     @staticmethod
     def from_json(d: dict[str, Any]) -> "AgentConfig":
@@ -183,6 +206,7 @@ class AgentConfig:
             ),
             ctx=ContextPolicy.from_json(d["ctx"]) if d.get("ctx") else None,
             summarizer=d.get("summarizer"),
+            native_tools=bool(d.get("nativeTools", d.get("native_tools", False))),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -206,6 +230,8 @@ class AgentConfig:
             out["ctx"] = self.ctx.to_json()
         if self.summarizer is not None:
             out["summarizer"] = self.summarizer
+        if self.native_tools:
+            out["nativeTools"] = True
         return out
 
     @staticmethod
@@ -227,6 +253,7 @@ class TraceEntry:
     input_ref: Optional[str] = None
     output_ref: Optional[str] = None
     schema_ref: Optional[str] = None
+    call_id: Optional[str] = None
     error: Optional[str] = None
 
     def to_json(self) -> dict[str, Any]:
@@ -241,6 +268,8 @@ class TraceEntry:
             out["outputRef"] = self.output_ref
         if self.schema_ref is not None:
             out["schemaRef"] = self.schema_ref
+        if self.call_id is not None:
+            out["callId"] = self.call_id
         if self.error is not None:
             out["error"] = self.error
         return out
@@ -253,6 +282,7 @@ class TraceEntry:
             input_ref=d.get("inputRef", d.get("input_ref")),
             output_ref=d.get("outputRef", d.get("output_ref")),
             schema_ref=d.get("schemaRef", d.get("schema_ref")),
+            call_id=d.get("callId", d.get("call_id")),
             error=d.get("error"),
         )
 

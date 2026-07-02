@@ -499,11 +499,17 @@ def make_local_reasoner(
     """
 
     async def caller(reasoner_name: str, payload: Any) -> Any:
+        tools = None
+        value = payload
+        if isinstance(payload, dict) and "tools" in payload:
+            tools = payload["tools"]
+            value = {key: val for key, val in payload.items() if key != "tools"}
         return await complete_reasoner(
             get_reasoner(reasoner_name),
-            payload,
+            value,
             acompletion=_resolve_acompletion(acompletion),
             default_provider=default_provider,
+            tools=tools,
         )
 
     return caller

@@ -10,26 +10,30 @@ the design note).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, cast
 
 from .agent_loop import (
     AgentConfig,
     AgentContractMap,
     AgentState,
     CallDenial,
+    DEFAULT_TOOL_COST,
+    Decision,
     TraceEntry,
     action_cost,
     authorize_call,
     authorize_subflow,
     charge_tool_call,
+    contract_for_tool,
     interpret_reasoner_reply,
     terminal_result,
     would_exceed_budget,
 )
-from .kinds import EnforcementMode
+from .kinds import Effect, EnforcementMode
 from .transcript import TRANSCRIPT_SCOPES, split_summary_reply, transcript_for
 
 logger = logging.getLogger("composable_agents.turn")
@@ -44,6 +48,13 @@ class Halt:
     status: str
     output: Any = None
     reason: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class CallManyResult:
+    index: int
+    observation: dict[str, Any]
+    trace: TraceEntry
 
 
 StepResult = Union[AgentState, Halt]
@@ -151,7 +162,11 @@ def controller_turn(
         if new_summary is not None:
             state.summary = new_summary
         state.charge(cfg.think_cost)
-        action = interpret_reasoner_reply(reply, strict=not cfg.permissive_controller)
+        action = interpret_reasoner_reply(
+            reply,
+            strict=not cfg.permissive_controller,
+            native_tools=cfg.native_tools,
+        )
 
         if action.decision.value == "finish":
             return Halt("done", output=action.payload)
@@ -164,7 +179,77 @@ def controller_turn(
         if would_exceed_budget(state, cost, cfg.budget):
             return Halt("over_budget")
 
-        if action.decision.value == "call":
+        if action.decision is Decision.CALL_MANY:
+            calls = cast(list[dict[str, Any]], action.payload)
+            for entry in calls:
+                tool = cast(str, entry["tool"])
+                halt = denial_to_halt(authorize_call(
+                    tool, unconstrained=unconstrained, granted_set=granted_set,
+                    contracts=contracts))
+                if halt is not None:
+                    return halt
+            for entry in calls:
+                tool = cast(str, entry["tool"])
+                denial = charge_tool_call(state, tool, contracts)
+                halt = denial_to_halt(denial)
+                if halt is not None:
+                    return halt
+                if denial is not None:
+                    state.call_counts[tool] = state.call_counts.get(tool, 0) + 1
+
+            async def execute_entry(index: int, entry: dict[str, Any]) -> CallManyResult:
+                tool = cast(str, entry["tool"])
+                call_input = entry.get("input")
+                if call_input is None:
+                    call_input = state.last
+                error: Optional[str] = None
+                try:
+                    out = await call_tool(tool, call_input)
+                except Exception as exc:  # noqa: BLE001
+                    error = repr(exc)
+                    logger.warning("tool %r failed: %s", tool, error)
+                    out = {"error": error, "tool": tool}
+                return CallManyResult(
+                    index=index,
+                    observation={
+                        "id": entry.get("id"),
+                        "tool": tool,
+                        "output": out,
+                    },
+                    trace=TraceEntry(
+                        decision="call",
+                        ref=tool,
+                        cost=DEFAULT_TOOL_COST,
+                        call_id=cast(Optional[str], entry.get("id")),
+                        error=error,
+                    ),
+                )
+
+            results: list[Optional[CallManyResult]] = [None] * len(calls)
+            read_items = [
+                (index, entry)
+                for index, entry in enumerate(calls)
+                if contract_for_tool(cast(str, entry["tool"]), contracts).effect is Effect.READ
+            ]
+            if read_items:
+                read_results = await asyncio.gather(
+                    *(execute_entry(index, entry) for index, entry in read_items)
+                )
+                for result in read_results:
+                    results[result.index] = result
+            for index, entry in enumerate(calls):
+                if results[index] is None:
+                    results[index] = await execute_entry(index, entry)
+
+            ordered_results: list[CallManyResult] = []
+            for maybe_result in results:
+                assert maybe_result is not None
+                ordered_results.append(maybe_result)
+            state.charge(cost)
+            state.last = [result.observation for result in ordered_results]
+            for result in ordered_results:
+                state.record(result.trace)
+        elif action.decision.value == "call":
             tool = action.payload["tool"]
             halt = denial_to_halt(authorize_call(
                 tool, unconstrained=unconstrained, granted_set=granted_set,

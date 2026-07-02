@@ -379,6 +379,20 @@ def snapshot_from_tools(tools: Sequence[Tool[Any, Any]]) -> McpSnapshot:
     return McpSnapshot(native={native_tool.name: native_tool.native_spec for native_tool in tools})
 
 
+def provider_tool_defs(tools: Sequence[Tool[Any, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": native_tool.name,
+                "description": (native_tool.fn.__doc__ or "").strip(),
+                "parameters": native_tool.input_schema,
+            },
+        }
+        for native_tool in tools
+    ]
+
+
 def _derive_agent_name(
     *,
     model: str,
@@ -386,16 +400,18 @@ def _derive_agent_name(
     budget_cost: Optional[float],
     max_rounds: int,
     instructions: str,
+    native_tools: bool = False,
 ) -> str:
-    payload = canonical_json(
-        {
-            "budget_cost": budget_cost,
-            "instructions": instructions,
-            "max_rounds": max_rounds,
-            "model": model,
-            "tools": list(tool_names),
-        }
-    )
+    name_parts: dict[str, Any] = {
+        "budget_cost": budget_cost,
+        "instructions": instructions,
+        "max_rounds": max_rounds,
+        "model": model,
+        "tools": list(tool_names),
+    }
+    if native_tools:
+        name_parts["native_tools"] = True
+    payload = canonical_json(name_parts)
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
     return f"agent-{digest}"
 
@@ -416,6 +432,7 @@ class Agent(FlowLike[Any, Any]):
         max_rounds: int = 24,
         instructions: Optional[str] = None,
         mode: EnforcementMode | str = EnforcementMode.STRICT,
+        native_tools: bool = False,
         langfuse_export: Optional[
             Callable[[Sequence[ProjectionEvent], str], None]
         ] = None,
@@ -474,6 +491,7 @@ class Agent(FlowLike[Any, Any]):
                 budget_cost=budget_cost,
                 max_rounds=max_rounds,
                 instructions=system,
+                native_tools=native_tools,
             )
         else:
             resolved_name = name
@@ -493,9 +511,15 @@ class Agent(FlowLike[Any, Any]):
         self._instructions = instructions
         self._reasoner_fn = llm or default_local_reasoner
         self._langfuse_export = langfuse_export
+        self._native_tools = native_tools
         self._budget = Budget(cost=budget_cost) if budget_cost is not None else None
         self._mode = EnforcementMode.coerce(mode)
-        self._cfg = AgentConfig(max_rounds=max_rounds, budget=self._budget, mode=self._mode)
+        self._cfg = AgentConfig(
+            max_rounds=max_rounds,
+            budget=self._budget,
+            mode=self._mode,
+            native_tools=native_tools,
+        )
         self._granted = {native_tool.name for native_tool in self._tools}
         self._contracts = {
             native_tool.name: {
@@ -566,6 +590,7 @@ class Agent(FlowLike[Any, Any]):
             "max_rounds": self._max_rounds,
             "instructions": self._instructions,
             "mode": self._mode,
+            "native_tools": self._native_tools,
             "langfuse_export": self._langfuse_export,
         }
 
@@ -781,6 +806,7 @@ class Agent(FlowLike[Any, Any]):
         projection = InMemoryProjection()
         emitter = ProjectionEmitter(projection)
         tool_fns = {native_tool.name: native_tool.bound_tool for native_tool in self._tools}
+        native_tool_defs = provider_tool_defs(self._tools) if self._cfg.native_tools else None
         max_call_limits = (
             deployment.capabilities.max_call_limits()
             if deployment.capabilities is not None
@@ -797,7 +823,12 @@ class Agent(FlowLike[Any, Any]):
             # a real llm caller resolves to recover system + reply_schema, and it
             # matches the long-documented ``_reasoner_name`` parameter. Scripted
             # callers ignore it, so this is behaviour-preserving for them.
-            reply = self._reasoner_fn(self._name, payload)
+            controller_payload = (
+                {**payload, "tools": native_tool_defs}
+                if native_tool_defs is not None
+                else payload
+            )
+            reply = self._reasoner_fn(self._name, controller_payload)
             if inspect.isawaitable(reply):
                 reply = await reply
             # A provider llm seam (make_local_reasoner) returns an LlmResult so the
