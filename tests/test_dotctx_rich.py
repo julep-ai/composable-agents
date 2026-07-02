@@ -300,17 +300,74 @@ def test_prompt_without_role_markers_stays_whole_system_template(tmp_path: Path)
 
 
 # --------------------------------------------------------------------------- #
+# require_tool_call / response_format settings + numeric-string coercion
+# (mem-mcp census: require_tool_call in 5 prompts, response_format always
+# {type: json_object}; record/execute.ctx sources max_rounds from $env).
+# --------------------------------------------------------------------------- #
+def test_require_tool_call_and_response_format_load(tmp_path: Path) -> None:
+    pkg = _write_pkg(
+        tmp_path, "rtc.ctx",
+        "name: rich.rtc\nmodel: m\nrequire_tool_call: true\n"
+        "response_format:\n  type: json_object\n",
+        {"prompt.j2": "hello"},
+    )
+    b = load_dotctx(str(pkg))
+    assert b.require_tool_call is True
+    assert b.response_format == "json_object"
+
+
+def test_response_format_bad_shape_is_teaching_error(tmp_path: Path) -> None:
+    pkg = _write_pkg(
+        tmp_path, "rtc_bad.ctx", "name: rich.rtcbad\nmodel: m\nresponse_format: json\n",
+        {"prompt.j2": "hello"},
+    )
+    with pytest.raises(ValueError, match=r"type: json_object"):
+        load_dotctx(str(pkg))
+
+
+def test_yglu_numeric_string_setting_coerces(tmp_path: Path) -> None:
+    pytest.importorskip("yglu")
+    pkg = _write_pkg(
+        tmp_path, "rounds.ctx",
+        'name: rich.rounds\nmodel: m\nmax_rounds: !? $env.get("MAX_ROUNDS", 12)\n',
+        {"prompt.j2": "hello"},
+    )
+    # env vars are strings; the yglu default stays an int — both land as int.
+    assert load_dotctx(str(pkg), env={"MAX_ROUNDS": "9"}).max_rounds == 9
+
+
+def test_yglu_numeric_string_default_stays_int(tmp_path: Path) -> None:
+    pytest.importorskip("yglu")
+    pkg = _write_pkg(
+        tmp_path, "rounds_def.ctx",
+        'name: rich.rounds_def\nmodel: m\nmax_rounds: !? $env.get("MAX_ROUNDS", 12)\n',
+        {"prompt.j2": "hello"},
+    )
+    assert load_dotctx(str(pkg), env={}).max_rounds == 12
+
+
+def test_non_numeric_string_setting_errors(tmp_path: Path) -> None:
+    pkg = _write_pkg(
+        tmp_path, "rounds_bad.ctx",
+        'name: rich.rounds_bad\nmodel: m\nmax_rounds: "many"\n',
+        {"prompt.j2": "hello"},
+    )
+    with pytest.raises(ValueError, match="max_rounds"):
+        load_dotctx(str(pkg))
+
+
+# --------------------------------------------------------------------------- #
 # Rejections.
 # --------------------------------------------------------------------------- #
 def test_unknown_settings_keys_error(tmp_path: Path) -> None:
     pkg = _write_pkg(
         tmp_path, "weird.ctx",
-        "model: m\nrequire_tool_call: true\nresponse_format: json\n",
+        "model: m\ntop_p: 0.9\nstop: []\n",
         {"prompt.j2": "hello"},
     )
     with pytest.raises(ValueError) as ei:
         load_dotctx(str(pkg))
-    assert "require_tool_call" in str(ei.value) and "response_format" in str(ei.value)
+    assert "top_p" in str(ei.value) and "stop" in str(ei.value)
 
 
 def test_bundle_rejects_extra_roles(tmp_path: Path) -> None:
@@ -382,6 +439,22 @@ def test_reasoner_identity_adds_new_keys_only_when_present() -> None:
     DEFAULT_REGISTRY.register_reasoner(Reasoner(name="plain.norich", model="m", system="s"))
     plain = _reasoner_identity("plain.norich")
     assert "userRender" not in plain and "maxTokens" not in plain and "systemRender" not in plain
+    assert "requireToolCall" not in plain and "responseFormat" not in plain
+
+
+def test_reasoner_identity_records_require_tool_call_and_response_format(
+    tmp_path: Path,
+) -> None:
+    _write_pkg(
+        tmp_path, "rtc_ident.ctx",
+        "name: rich.rtc_ident\nmodel: m\nrequire_tool_call: true\n"
+        "response_format:\n  type: json_object\n",
+        {"prompt.j2": "hello"},
+    )
+    load_dotctx(str(tmp_path / "rtc_ident.ctx"))
+    ident = _reasoner_identity("rich.rtc_ident")
+    assert ident["requireToolCall"] is True
+    assert ident["responseFormat"] == "json_object"
 
 
 def test_renderer_source_hashes_cover_both_roles() -> None:

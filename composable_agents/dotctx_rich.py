@@ -39,7 +39,15 @@ except ImportError as e:  # pragma: no cover - exercised via sys.modules patchin
     ) from e
 
 from .capabilities import ToolGrant
-from .dotctx import Reasoner, _model_and_effort, _sub_from
+from .dotctx import (
+    Reasoner,
+    _as_float,
+    _as_int,
+    _model_and_effort,
+    _require_tool_call_setting,
+    _response_format_setting,
+    _sub_from,
+)
 from .kinds import ContextScope
 from .registry import DEFAULT_REGISTRY, Registry, ToolSchemaExpectation
 
@@ -59,6 +67,10 @@ _ALLOWED_SETTINGS = frozenset(
         "reasoningEffort",
         "output_retries",
         "outputRetries",
+        "require_tool_call",
+        "requireToolCall",
+        "response_format",
+        "responseFormat",
         "agent",
         "sub",
         "context",
@@ -727,16 +739,20 @@ def _build_reasoner(
         system="",
         reply=reply,
         tools=tools,
-        temperature=settings.get("temperature"),
-        max_rounds=settings.get("max_rounds") or settings.get("maxRounds"),
+        temperature=_as_float(settings.get("temperature"), key="temperature"),
+        max_rounds=_as_int(settings.get("max_rounds") or settings.get("maxRounds"),
+                           key="max_rounds"),
         is_agent=bool(settings.get("agent", False)),
         sub_contract=_sub_from(settings.get("sub")),
         context_scope=scope,
         system_render=system_render,
         user_render=user_render,
-        max_tokens=settings.get("max_tokens") or settings.get("maxTokens"),
+        max_tokens=_as_int(settings.get("max_tokens") or settings.get("maxTokens"),
+                           key="max_tokens"),
         reasoning_effort=effort,
         output_retries=output_retries,
+        require_tool_call=_require_tool_call_setting(settings),
+        response_format=_response_format_setting(settings),
     )
 
 

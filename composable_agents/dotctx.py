@@ -136,7 +136,15 @@ def _reply_to_schema(reply: Any) -> dict[str, Any]:
 
 @dataclass(frozen=True, init=False)
 class Reasoner:
-    """A resolved model-call configuration, addressed by ``name``."""
+    """A resolved model-call configuration, addressed by ``name``.
+
+    ``require_tool_call`` is declarative in Phase 2: recorded here and hashed
+    into the deploy identity; agent-loop enforcement lands with native
+    tool-calling (Phase 3/4). ``response_format`` records mem-mcp's
+    ``response_format: {type: json_object}`` setting as ``"json_object"``;
+    declaring it alongside a reply schema is allowed — the schema wins at
+    call time (the provider call never carries both).
+    """
 
     name: str
     model: str
@@ -153,6 +161,8 @@ class Reasoner:
     max_tokens: Optional[int] = None      # forwarded to the provider call when set
     reasoning_effort: Optional[str] = None  # provider thinking effort (model_slugs.EFFORT_LEVELS)
     output_retries: int = 0               # re-asks when a schema'd reply fails to parse
+    require_tool_call: bool = False       # declarative; loop enforcement is Phase 3/4
+    response_format: Optional[str] = None  # "json_object"; reply_schema wins at call time
 
     def __init__(
         self,
@@ -172,6 +182,8 @@ class Reasoner:
         reply: Any = _REPLY_UNSET,
         reasoning_effort: Optional[str] = None,
         output_retries: int = 0,
+        require_tool_call: bool = False,
+        response_format: Optional[str] = None,
     ) -> None:
         if reply is _REPLY_UNSET or reply is None:
             materialized = None
@@ -195,6 +207,8 @@ class Reasoner:
         object.__setattr__(self, "max_tokens", max_tokens)
         object.__setattr__(self, "reasoning_effort", reasoning_effort)
         object.__setattr__(self, "output_retries", output_retries)
+        object.__setattr__(self, "require_tool_call", require_tool_call)
+        object.__setattr__(self, "response_format", response_format)
 
 
 _REASONERS: dict[str, Reasoner] = DEFAULT_REGISTRY.reasoners
@@ -225,6 +239,72 @@ def _sub_from(d: Optional[dict[str, Any]]) -> Optional[SubContract]:
     return SubContract(shape=shape, summary_policy=sp)
 
 
+def _as_int(value: Any, *, key: str) -> Optional[int]:
+    """An optional int setting; numeric strings coerce — yglu ``$env.get``
+    values arrive as strings (record/execute.ctx's ``max_rounds`` is the real
+    case) — and anything else is a loud teaching error."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be an integer, got {value!r}")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            raise ValueError(
+                f"{key} must be an integer, got {value!r}; "
+                "env-sourced values must be numeric strings"
+            ) from None
+    raise ValueError(f"{key} must be an integer, got {value!r}")
+
+
+def _as_float(value: Any, *, key: str) -> Optional[float]:
+    """An optional float setting, with the same numeric-string coercion."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be a number, got {value!r}")
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            raise ValueError(
+                f"{key} must be a number, got {value!r}; "
+                "env-sourced values must be numeric strings"
+            ) from None
+    raise ValueError(f"{key} must be a number, got {value!r}")
+
+
+def _require_tool_call_setting(settings: Mapping[str, Any]) -> bool:
+    value = settings.get("require_tool_call")
+    if value is None:
+        value = settings.get("requireToolCall")
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ValueError(f"require_tool_call must be true or false, got {value!r}")
+    return value
+
+
+def _response_format_setting(settings: Mapping[str, Any]) -> Optional[str]:
+    """mem-mcp's ``response_format:`` key, stored as the string ``"json_object"``."""
+    value = settings.get("response_format")
+    if value is None:
+        value = settings.get("responseFormat")
+    if value is None:
+        return None
+    if value == {"type": "json_object"}:
+        return "json_object"
+    raise ValueError(
+        f"unsupported response_format {value!r}; the only supported form is "
+        "the mapping 'response_format: {type: json_object}'"
+    )
+
+
 def _model_and_effort(settings: dict[str, Any]) -> tuple[str, Optional[str], int]:
     """Canonical model, effort (explicit key beats @suffix), output_retries."""
     slug = normalize_model_slug(str(settings.get("model", "claude-sonnet-4")))
@@ -235,8 +315,8 @@ def _model_and_effort(settings: dict[str, Any]) -> tuple[str, Optional[str], int
             raise ValueError(
                 f"reasoning_effort {effort!r} is not one of {sorted(EFFORT_LEVELS)}"
             )
-    retries = int(settings.get("output_retries")
-                  or settings.get("outputRetries") or 0)
+    retries = _as_int(settings.get("output_retries")
+                      or settings.get("outputRetries"), key="output_retries") or 0
     if retries < 0:
         raise ValueError("output_retries must be >= 0")
     return slug.model, (effort or slug.reasoning_effort), retries
@@ -277,16 +357,20 @@ def reasoner_from_settings(settings: dict[str, Any], *, name: Optional[str] = No
         system=system,
         reply=reply_schema,
         tools=tuple(settings.get("tools", []) or []),
-        temperature=settings.get("temperature"),
-        max_rounds=settings.get("max_rounds") or settings.get("maxRounds"),
+        temperature=_as_float(settings.get("temperature"), key="temperature"),
+        max_rounds=_as_int(settings.get("max_rounds") or settings.get("maxRounds"),
+                           key="max_rounds"),
         is_agent=bool(settings.get("agent", False)),
         sub_contract=_sub_from(settings.get("sub")),
         context_scope=scope,
         system_render=settings.get("system_render") or settings.get("systemRender"),
         user_render=settings.get("user_render") or settings.get("userRender"),
-        max_tokens=settings.get("max_tokens") or settings.get("maxTokens"),
+        max_tokens=_as_int(settings.get("max_tokens") or settings.get("maxTokens"),
+                           key="max_tokens"),
         reasoning_effort=effort,
         output_retries=output_retries,
+        require_tool_call=_require_tool_call_setting(settings),
+        response_format=_response_format_setting(settings),
     )
     return DEFAULT_REGISTRY.register_reasoner(reasoner)
 
