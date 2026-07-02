@@ -954,6 +954,7 @@ class Agent(FlowLike[Any, Any]):
         policy: Any = None,
         history_threshold: Optional[int] = None,
         channel_capacity: Optional[int] = None,
+        max_consecutive_turn_errors: int = 3,
         session_id: Optional[str] = None,
         environment: Any = None,
     ) -> SessionHandle:
@@ -1042,6 +1043,7 @@ class Agent(FlowLike[Any, Any]):
                 mode=self._mode,
                 principal=principal,
                 channel_capacity=channel_capacity,
+                max_consecutive_turn_errors=max_consecutive_turn_errors,
                 manifest=session_deployment.manifest,
             )
 
