@@ -10,7 +10,6 @@ installed ``dotctx``. The llm_utils matrix mirrors mem-mcp's behavior
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import sys
 import types
@@ -124,12 +123,10 @@ def test_load_eval_module_via_shim(tmp_path: Path) -> None:
 
 
 def test_sys_modules_clean_after_load(tmp_path: Path) -> None:
-    if importlib.util.find_spec("dotctx") is not None:  # pragma: no cover
-        pytest.skip("a real dotctx package is installed; shim never engages")
-    before = set(sys.modules)
+    before = {k: sys.modules[k] for k in _dotctx_keys()}
     load_eval_module(str(_write_eval_py(tmp_path)))
-    assert not _dotctx_keys()                      # aliases + eval module removed
-    assert before - set(sys.modules) == set()      # untouched keys preserved
+    after = {k: sys.modules[k] for k in _dotctx_keys()}
+    assert after == before                        # aliases + eval module restored
 
 
 def test_shim_removed_even_when_eval_py_raises(tmp_path: Path) -> None:
@@ -144,6 +141,8 @@ def test_real_dotctx_is_never_clobbered(tmp_path: Path, monkeypatch: pytest.Monk
     fake = types.ModuleType("dotctx")
     fake.extract_llm_content = lambda response: "sentinel"  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "dotctx", fake)
+    monkeypatch.delitem(sys.modules, "dotctx.eval_types", raising=False)
+    monkeypatch.delitem(sys.modules, "dotctx.llm_utils", raising=False)
     path = tmp_path / "eval.py"
     path.write_text(
         "from dotctx import extract_llm_content\n"
@@ -287,6 +286,13 @@ def test_eval_config_unknown_key_is_teaching_error(tmp_path: Path) -> None:
     path = tmp_path / "eval.yaml"
     path.write_text("max_rounds: 3\n")
     with pytest.raises(ValueError, match=r"unknown eval\.yaml keys.*max_rounds.*allowed"):
+        load_eval_config(str(path))
+
+
+def test_eval_config_bad_mapping_key_is_teaching_error(tmp_path: Path) -> None:
+    path = tmp_path / "eval.yaml"
+    path.write_text("scoring: []\n")
+    with pytest.raises(ValueError, match=r"scoring.*must be a mapping"):
         load_eval_config(str(path))
 
 

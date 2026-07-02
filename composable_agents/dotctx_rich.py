@@ -28,15 +28,18 @@ from __future__ import annotations
 import ast
 import hashlib
 import html
+import importlib
 import json
 import os
 import re
 import textwrap
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Optional, Sequence
+from pathlib import Path
+from typing import Any, Callable, Mapping, Optional, Sequence, cast
 
 try:
     import jinja2
+    from jinja2 import meta as jinja2_meta
 except ImportError as e:  # pragma: no cover - exercised via sys.modules patching
     raise ImportError(
         "jinja2 is required for the rich dotctx layout (prompt.j2 / messages/); "
@@ -51,6 +54,7 @@ from .dotctx import (
     _model_and_effort,
     _require_tool_call_setting,
     _response_format_setting,
+    _setting,
     _sub_from,
 )
 from .kinds import ContextScope
@@ -143,40 +147,90 @@ def _filter_to_json(value: Any, indent: Optional[int] = None) -> str:
     return json.dumps(value, indent=indent, ensure_ascii=False)
 
 
-def _unsupported_filter(name: str) -> Callable[..., str]:
-    def raise_unsupported(*_args: Any, **_kwargs: Any) -> str:
+def _resolve_file_filter_path(path: str, base_dir: Optional[str]) -> Path:
+    file_path = Path(path)
+    if not file_path.is_absolute() and base_dir is not None:
+        file_path = Path(base_dir) / file_path
+    return file_path
+
+
+def _filter_import_yaml(path: str, base_dir: Optional[str]) -> Any:
+    import yaml
+
+    with _resolve_file_filter_path(path, base_dir).open(encoding="utf-8") as fh:
+        return yaml.safe_load(fh)
+
+
+def _filter_import_text(path: str, base_dir: Optional[str]) -> str:
+    return _resolve_file_filter_path(path, base_dir).read_text(encoding="utf-8")
+
+
+def _encoding_for_model(model: str) -> Any:
+    try:
+        tiktoken = importlib.import_module("tiktoken")
+    except ImportError as exc:  # pragma: no cover - depends on optional extra
         raise ValueError(
-            f"the {name!r} dotctx filter is declared but not renderable here: "
-            "it needs mem-mcp's base_dir/tokenizer wiring, which is not part "
-            "of the Phase 2 loading surface"
-        )
+            "the 'count_tokens' and 'truncate_tokens' dotctx filters require tiktoken"
+        ) from exc
+    try:
+        return tiktoken.encoding_for_model(model)
+    except KeyError:
+        return tiktoken.get_encoding("cl100k_base")
 
-    return raise_unsupported
+
+def _filter_count_tokens(text: str, model: str = "gpt-4") -> int:
+    return len(_encoding_for_model(model).encode(text))
 
 
-_MEMMCP_FILTERS: dict[str, Callable[..., Any]] = {
-    "as_xml": _filter_as_xml,
-    "as_codeblock": _filter_as_codeblock,
-    "numbered_list": _filter_numbered_list,
-    "bulleted_list": _filter_bulleted_list,
-    "dedent": textwrap.dedent,
-    "to_json": _filter_to_json,
-    "from_json": json.loads,
-    **{
-        name: _unsupported_filter(name)
-        for name in ("import_yaml", "import_text", "count_tokens", "truncate_tokens")
-    },
-}
+def _filter_truncate_tokens(
+    text: str,
+    max_tokens: int,
+    model: str = "gpt-4",
+    suffix: str = "...",
+) -> str:
+    encoding = _encoding_for_model(model)
+    tokens = encoding.encode(text)
+    if len(tokens) <= max_tokens:
+        return text
+    suffix_tokens = encoding.encode(suffix)
+    truncate_at = max_tokens - len(suffix_tokens)
+    if truncate_at <= 0:
+        return suffix
+    return cast(str, encoding.decode(tokens[:truncate_at])) + suffix
+
+
+def _memmcp_filters(base_dir: Optional[str]) -> dict[str, Callable[..., Any]]:
+    return {
+        "as_xml": _filter_as_xml,
+        "as_codeblock": _filter_as_codeblock,
+        "numbered_list": _filter_numbered_list,
+        "bulleted_list": _filter_bulleted_list,
+        "count_tokens": _filter_count_tokens,
+        "truncate_tokens": _filter_truncate_tokens,
+        "dedent": textwrap.dedent,
+        "import_yaml": lambda p: _filter_import_yaml(p, base_dir),
+        "import_text": lambda p: _filter_import_text(p, base_dir),
+        "to_json": _filter_to_json,
+        "from_json": json.loads,
+    }
 
 
 # --------------------------------------------------------------------------- #
 # Templates -> registered renderers.
 # --------------------------------------------------------------------------- #
 def _template_renderer(
-    package: str, role: str, source: str
+    package: str, role: str, source: str, base_dir: Optional[str]
 ) -> Callable[[Mapping[str, Any]], str]:
-    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
-    env.filters.update(_MEMMCP_FILTERS)
+    loader = jinja2.FileSystemLoader(base_dir) if base_dir is not None else None
+    env = jinja2.Environment(
+        loader=loader,
+        extensions=["jinja2.ext.loopcontrols"],
+        undefined=jinja2.StrictUndefined,
+        keep_trailing_newline=True,
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+    env.filters.update(_memmcp_filters(base_dir))
     template = env.from_string(source)
 
     def render(ctx: Mapping[str, Any]) -> str:
@@ -190,11 +244,96 @@ def _template_renderer(
     return render
 
 
-def _register_template(registry: Registry, package: str, role: str, source: str) -> str:
-    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+_IMPORT_FILE_FILTER_RE = re.compile(
+    r"""(?P<quote>['"])(?P<path>[^'"]+)(?P=quote)\s*\|\s*(?P<filter>import_yaml|import_text)\b"""
+)
+
+
+def _rel_dependency(path: Path, base_dir: str) -> str:
+    try:
+        return os.path.relpath(path, base_dir)
+    except ValueError:
+        return str(path)
+
+
+def _dependency_path(base_dir: str, ref: str) -> Path:
+    path = Path(ref)
+    if path.is_absolute():
+        return path
+    return Path(base_dir) / path
+
+
+def _read_dependency(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return f"<missing: {exc}>"
+
+
+def _template_dependencies(
+    source: str,
+    base_dir: Optional[str],
+    seen: Optional[set[str]] = None,
+) -> list[tuple[str, str, str]]:
+    if base_dir is None:
+        return []
+    seen = seen if seen is not None else set()
+    deps: list[tuple[str, str, str]] = []
+
+    parsed = jinja2.Environment(extensions=["jinja2.ext.loopcontrols"]).parse(source)
+    for ref in jinja2_meta.find_referenced_templates(parsed):
+        if ref is None:
+            deps.append(("template", "<dynamic>", ""))
+            continue
+        path = _dependency_path(base_dir, ref)
+        key = str(path.resolve()) if path.exists() else str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        content = _read_dependency(path)
+        rel = _rel_dependency(path, base_dir)
+        deps.append(("template", rel, content))
+        deps.extend(_template_dependencies(content, base_dir, seen))
+
+    for match in _IMPORT_FILE_FILTER_RE.finditer(source):
+        ref = match.group("path")
+        path = _dependency_path(base_dir, ref)
+        key = str(path.resolve()) if path.exists() else str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deps.append((match.group("filter"), _rel_dependency(path, base_dir), _read_dependency(path)))
+
+    return deps
+
+
+def _source_with_dependencies(source: str, base_dir: Optional[str]) -> str:
+    deps = _template_dependencies(source, base_dir)
+    if not deps:
+        return source
+    chunks = [source, "\n\n# dotctx dependency bundle\n"]
+    for kind, rel, content in deps:
+        chunks.append(f"\n# {kind}: {rel}\n{content}")
+    return "".join(chunks)
+
+
+def _register_template(
+    registry: Registry,
+    package: str,
+    role: str,
+    source: str,
+    *,
+    base_dir: Optional[str],
+) -> str:
+    source_for_hash = _source_with_dependencies(source, base_dir)
+    digest = hashlib.sha256(source_for_hash.encode("utf-8")).hexdigest()
     name = f"dotctx/{package}/{role}@v{digest[:_HASH_PREFIX_LEN]}"
     if name not in registry.renderers:  # same name => same content; reload is a no-op
-        registry.register_renderer(name, _template_renderer(package, role, source), source=source)
+        registry.register_renderer(
+            name,
+            _template_renderer(package, role, source, base_dir),
+            source=source_for_hash,
+        )
     return name
 
 
@@ -244,7 +383,11 @@ def _split_role_markers(source: str, origin: str) -> Optional[tuple[str, Optiona
 
     # parts: [pre, role1, content1, role2, content2, ...]; contents stripped
     # like mem-mcp's _parse_role_markers.
-    sections = list(zip(parts[1::2], (c.strip() for c in parts[2::2]), strict=True))
+    sections = list(zip(
+        (role.strip().lower() for role in parts[1::2]),
+        (c.strip() for c in parts[2::2]),
+        strict=True,
+    ))
     expected = ("system", "user")
     for (role, _), want in zip(sections, expected, strict=False):
         if role != want:
@@ -785,14 +928,33 @@ def _default_name(path: str) -> str:
     return base[:-4] if base.endswith(".ctx") else base
 
 
+def _template_base_dir(path: str) -> Optional[str]:
+    """Default to mem-mcp's shared prompts root when a partials/ ancestor exists."""
+    source = Path(path)
+    start = source.parent if source.is_file() else source
+    for candidate in (start, *start.parents):
+        if (candidate / "partials").is_dir():
+            return str(candidate)
+    return str(start)
+
+
 def _register_role_templates(
-    registry: Registry, package: str, system_src: Optional[str], user_src: Optional[str]
+    registry: Registry,
+    package: str,
+    system_src: Optional[str],
+    user_src: Optional[str],
+    *,
+    base_dir: Optional[str],
 ) -> dict[str, str]:
     renderer_names: dict[str, str] = {}
     if system_src is not None:
-        renderer_names["system"] = _register_template(registry, package, "system", system_src)
+        renderer_names["system"] = _register_template(
+            registry, package, "system", system_src, base_dir=base_dir
+        )
     if user_src is not None:
-        renderer_names["user"] = _register_template(registry, package, "user", user_src)
+        renderer_names["user"] = _register_template(
+            registry, package, "user", user_src, base_dir=base_dir
+        )
     return renderer_names
 
 
@@ -814,14 +976,14 @@ def _build_reasoner(
         reply=reply,
         tools=tools,
         temperature=_as_float(settings.get("temperature"), key="temperature"),
-        max_rounds=_as_int(settings.get("max_rounds") or settings.get("maxRounds"),
+        max_rounds=_as_int(_setting(settings, "max_rounds", "maxRounds"),
                            key="max_rounds"),
         is_agent=bool(settings.get("agent", False)),
         sub_contract=_sub_from(settings.get("sub")),
         context_scope=scope,
         system_render=system_render,
         user_render=user_render,
-        max_tokens=_as_int(settings.get("max_tokens") or settings.get("maxTokens"),
+        max_tokens=_as_int(_setting(settings, "max_tokens", "maxTokens"),
                            key="max_tokens"),
         reasoning_effort=effort,
         output_retries=output_retries,
@@ -868,7 +1030,10 @@ def load_single_file_dotctx(
 
     split = _split_role_markers(body, path)
     system_src, user_src = split if split is not None else (body, None)
-    renderer_names = _register_role_templates(registry, package, system_src, user_src)
+    base_dir = _template_base_dir(path)
+    renderer_names = _register_role_templates(
+        registry, package, system_src, user_src, base_dir=base_dir
+    )
 
     settings_tools: Sequence[Any] = settings.get("tools") or ()
     reasoner = _build_reasoner(
@@ -913,7 +1078,10 @@ def load_rich_dotctx(
     package = raw_name if isinstance(raw_name, str) and raw_name else _default_name(path)
 
     system_src, user_src = _read_templates(path)
-    renderer_names = _register_role_templates(registry, package, system_src, user_src)
+    base_dir = _template_base_dir(path)
+    renderer_names = _register_role_templates(
+        registry, package, system_src, user_src, base_dir=base_dir
+    )
 
     reply_schema: Optional[dict[str, Any]] = None
     schema_path = os.path.join(path, "schema.pyi")

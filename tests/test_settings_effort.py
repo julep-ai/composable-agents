@@ -75,6 +75,26 @@ def test_numeric_string_settings_coerce() -> None:
     assert r.temperature == 0.3
 
 
+def test_explicit_zero_settings_do_not_fall_through_to_camel_case() -> None:
+    r = reasoner_from_settings(
+        {
+            "model": "openai:gpt-4o",
+            "max_rounds": 0,
+            "maxRounds": 12,
+            "max_tokens": 0,
+            "maxTokens": 120,
+            "output_retries": 0,
+            "outputRetries": 2,
+            "temperature": 0,
+        },
+        name="t10.zero",
+    )
+    assert r.max_rounds == 0
+    assert r.max_tokens == 0
+    assert r.output_retries == 0
+    assert r.temperature == 0.0
+
+
 @pytest.mark.parametrize(
     "key, value",
     [("max_rounds", "many"), ("max_tokens", "12.5"),

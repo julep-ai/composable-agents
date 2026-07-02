@@ -127,8 +127,10 @@ def test_prompt_loading_never_executes_eval() -> None:
     # The fixture eval.py imports `dotctx`, which only exists inside the
     # explicit loader's sys.modules shim — executing it during prompt loading
     # would raise. Also assert the shim never leaks out of a prompt load.
+    before = {name: sys.modules[name] for name in sys.modules if name.startswith("dotctx")}
     load_rich_dotctx(str(FIXTURES / "episode_summary.ctx"), registry=Registry(), env={})
-    assert "dotctx" not in sys.modules
+    after = {name: sys.modules[name] for name in sys.modules if name.startswith("dotctx")}
+    assert after == before
     assert not any(name.startswith("dotctx_eval_") for name in sys.modules)
 
 

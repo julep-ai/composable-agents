@@ -15,9 +15,9 @@ Real ``eval.py`` files import ``from dotctx.eval_types import Sample`` /
 ``from dotctx import extract_llm_content``. :func:`load_eval_module` installs
 ``sys.modules`` aliases for ``dotctx`` / ``dotctx.eval_types`` /
 ``dotctx.llm_utils`` pointing at this module's namespace — ONLY for names not
-already importable (a real installed ``dotctx`` is never clobbered) — and
-restores ``sys.modules`` in a ``finally``. CLI/test-time only; the swap is
-process-global and not thread-safe (same caveat as the yglu env swap in
+already present in ``sys.modules`` (already-loaded real modules are never
+clobbered) — and restores ``sys.modules`` in a ``finally``. CLI/test-time only;
+the swap is process-global and not thread-safe (same caveat as the yglu env swap in
 :mod:`composable_agents.dotctx_yglu`).
 
 Imports cleanly without the ``[dotctx]`` (jinja2) or ``[yglu]`` extras; yaml
@@ -279,22 +279,13 @@ _LLM_UTILS_EXPORTS = ("strip_markdown_codeblock", "extract_llm_content", "parse_
 _EVAL_MODULE_COUNTER = itertools.count()
 
 
-def _importable(name: str) -> bool:
-    if name in sys.modules:
-        return True
-    try:
-        return importlib.util.find_spec(name) is not None
-    except (ImportError, ValueError):
-        # A parent that exists but is not a package raises ModuleNotFoundError.
-        return False
-
-
 def _install_dotctx_shims() -> list[str]:
-    """Alias ``dotctx`` / submodules to this module for names not importable.
+    """Alias ``dotctx`` / submodules to this module for unloaded names.
 
     Returns the installed keys; the caller must hand them back to
-    :func:`_remove_dotctx_shims` in a ``finally``. A real installed ``dotctx``
-    (or one already in ``sys.modules``) is never clobbered.
+    :func:`_remove_dotctx_shims` in a ``finally``. Modules that are already in
+    ``sys.modules`` are never clobbered, but an installed-yet-unloaded
+    third-party ``dotctx`` package does not change this loader's return types.
     """
     here = sys.modules[__name__]
     exports = {
@@ -305,7 +296,7 @@ def _install_dotctx_shims() -> list[str]:
     }
     shims: dict[str, types.ModuleType] = {}
     for name, attrs in exports.items():
-        if _importable(name):
+        if name in sys.modules:
             continue
         shim = types.ModuleType(name)
         shim.__doc__ = "composable-agents compat alias for mem-mcp dotctx (eval loading only)"
@@ -490,7 +481,9 @@ def _coerce_number(value: Any, *, key: str, origin: str, want_int: bool) -> floa
 
 
 def _mapping_key(raw: Mapping[str, Any], key: str, origin: str) -> dict[str, Any]:
-    value = raw.get(key) or {}
+    value = raw[key] if key in raw else {}
+    if value is None:
+        value = {}
     if not isinstance(value, dict):
         raise ValueError(f"eval.yaml {key} in {origin!r} must be a mapping")
     return dict(value)

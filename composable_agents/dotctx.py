@@ -305,18 +305,24 @@ def _response_format_setting(settings: Mapping[str, Any]) -> Optional[str]:
     )
 
 
+def _setting(settings: Mapping[str, Any], primary: str, secondary: str) -> Any:
+    if primary in settings:
+        return settings[primary]
+    return settings.get(secondary)
+
+
 def _model_and_effort(settings: dict[str, Any]) -> tuple[str, Optional[str], int]:
     """Canonical model, effort (explicit key beats @suffix), output_retries."""
     slug = normalize_model_slug(str(settings.get("model", "claude-sonnet-4")))
-    effort = settings.get("reasoning_effort") or settings.get("reasoningEffort")
+    effort = _setting(settings, "reasoning_effort", "reasoningEffort")
     if effort is not None:
         effort = str(effort).strip().lower()
         if effort not in EFFORT_LEVELS:
             raise ValueError(
                 f"reasoning_effort {effort!r} is not one of {sorted(EFFORT_LEVELS)}"
             )
-    retries = _as_int(settings.get("output_retries")
-                      or settings.get("outputRetries"), key="output_retries") or 0
+    retries = _as_int(_setting(settings, "output_retries", "outputRetries"),
+                      key="output_retries") or 0
     if retries < 0:
         raise ValueError("output_retries must be >= 0")
     return slug.model, (effort or slug.reasoning_effort), retries
@@ -358,14 +364,14 @@ def reasoner_from_settings(settings: dict[str, Any], *, name: Optional[str] = No
         reply=reply_schema,
         tools=tuple(settings.get("tools", []) or []),
         temperature=_as_float(settings.get("temperature"), key="temperature"),
-        max_rounds=_as_int(settings.get("max_rounds") or settings.get("maxRounds"),
+        max_rounds=_as_int(_setting(settings, "max_rounds", "maxRounds"),
                            key="max_rounds"),
         is_agent=bool(settings.get("agent", False)),
         sub_contract=_sub_from(settings.get("sub")),
         context_scope=scope,
         system_render=settings.get("system_render") or settings.get("systemRender"),
         user_render=settings.get("user_render") or settings.get("userRender"),
-        max_tokens=_as_int(settings.get("max_tokens") or settings.get("maxTokens"),
+        max_tokens=_as_int(_setting(settings, "max_tokens", "maxTokens"),
                            key="max_tokens"),
         reasoning_effort=effort,
         output_retries=output_retries,

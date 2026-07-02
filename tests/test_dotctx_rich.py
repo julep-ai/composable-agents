@@ -96,9 +96,9 @@ def test_renderer_names_pin_template_content() -> None:
 def test_renderers_render_from_context_only() -> None:
     rich = _rich()
     system = get_renderer(rich.renderer_names["system"])({"persona": "skeptic"})
-    assert system == "You are a careful research agent.\nPersona: skeptic"
+    assert system == "You are a careful research agent.\nPersona: skeptic\n"
     user = get_renderer(rich.renderer_names["user"])({"question": "why?"})
-    assert user == "Question: why?"
+    assert user == "Question: why?\n"
 
 
 def test_missing_context_variable_names_package_and_variable() -> None:
@@ -144,7 +144,7 @@ def test_single_template_package() -> None:
     assert b.name == "summarizer" and b.system == ""
     assert b.system_render is not None and b.user_render is None
     assert b.reply_schema is None and b.tools == () and b.max_tokens == 256
-    assert get_renderer(b.system_render)({"audience": "execs"}) == "Summarize for execs."
+    assert get_renderer(b.system_render)({"audience": "execs"}) == "Summarize for execs.\n"
 
 
 def test_load_dotctx_detects_rich_layout() -> None:
@@ -225,6 +225,16 @@ def test_role_markers_tight_spacing_matches(tmp_path: Path) -> None:
     pkg = _write_pkg(
         tmp_path, "markers_tight.ctx", "name: markers.tight\nmodel: m\n",
         {"prompt.j2": "<<<role:system>>>\nS {{ x }}\n<<<role:user>>>\nU {{ y }}\n"},
+    )
+    rich = load_rich_dotctx(str(pkg))
+    assert get_renderer(rich.renderer_names["system"])({"x": "1"}) == "S 1"
+    assert get_renderer(rich.renderer_names["user"])({"y": "2"}) == "U 2"
+
+
+def test_role_markers_uppercase_role_matches_reference_lowering(tmp_path: Path) -> None:
+    pkg = _write_pkg(
+        tmp_path, "markers_upper.ctx", "name: markers.upper\nmodel: m\n",
+        {"prompt.j2": "<<< role:SYSTEM >>>\nS {{ x }}\n<<< role:USER >>>\nU {{ y }}\n"},
     )
     rich = load_rich_dotctx(str(pkg))
     assert get_renderer(rich.renderer_names["system"])({"x": "1"}) == "S 1"
@@ -314,17 +324,55 @@ def test_memmcp_pure_filters_render(tmp_path: Path) -> None:
     assert out == '{"k": "v"}\n1. a\n2. b\n<note>x &lt; y</note>'
 
 
-def test_memmcp_file_filters_load_but_teach_at_render(tmp_path: Path) -> None:
-    # import_yaml/import_text (and the tiktoken pair) need mem-mcp's
-    # base_dir/tokenizer wiring; templates using them must still LOAD (jinja
-    # resolves filter names at compile time), while rendering is a loud error.
+def test_memmcp_includes_and_file_filters_render_from_shared_root(tmp_path: Path) -> None:
+    # mem-mcp's prompt_loader pins base_dir to the shared prompts root so prompt
+    # families can include `partials/...` and import sibling YAML data.
+    partials = tmp_path / "partials"
+    partials.mkdir()
+    (partials / "project_preamble.j2").write_text("Project: {{ project }}\n")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "facts.yaml").write_text("items:\n  - alpha\n  - beta\n")
     pkg = _write_pkg(
         tmp_path, "filefilters.ctx", "name: markers.filefilters\nmodel: m\n",
-        {"prompt.j2": "<<< role:system >>>\n{{ 'x.yaml' | import_yaml }}\n"},
+        {
+            "prompt.j2": (
+                "<<< role:system >>>\n"
+                "{% include 'partials/project_preamble.j2' %}"
+                "{% set facts = 'data/facts.yaml' | import_yaml %}"
+                "{{ facts['items'] | bulleted_list }}\n"
+                "{{ 'partials/project_preamble.j2' | import_text | trim }}"
+            )
+        },
     )
     rich = load_rich_dotctx(str(pkg))
-    with pytest.raises(ValueError, match="import_yaml"):
-        get_renderer(rich.renderer_names["system"])({})
+    assert get_renderer(rich.renderer_names["system"])({"project": "Atlas"}) == (
+        "Project: Atlas\n- alpha\n- beta\nProject: {{ project }}"
+    )
+
+
+def test_included_file_changes_renderer_name_and_hash(tmp_path: Path) -> None:
+    from composable_agents.registry import Registry
+
+    partials = tmp_path / "partials"
+    partials.mkdir()
+    partial = partials / "project_preamble.j2"
+    partial.write_text("Project one\n")
+    pkg = _write_pkg(
+        tmp_path, "hashdeps.ctx", "name: markers.hashdeps\nmodel: m\n",
+        {"prompt.j2": "<<< role:system >>>\n{% include 'partials/project_preamble.j2' %}"},
+    )
+    reg1 = Registry()
+    first = load_rich_dotctx(str(pkg), registry=reg1)
+    first_name = first.renderer_names["system"]
+    first_hash = reg1.renderer_source_hash_of(first_name)
+
+    partial.write_text("Project two\n")
+    reg2 = Registry()
+    second = load_rich_dotctx(str(pkg), registry=reg2)
+    second_name = second.renderer_names["system"]
+    assert second_name != first_name
+    assert reg2.renderer_source_hash_of(second_name) != first_hash
 
 
 def test_prompt_without_role_markers_stays_whole_system_template(tmp_path: Path) -> None:
@@ -337,7 +385,7 @@ def test_prompt_without_role_markers_stays_whole_system_template(tmp_path: Path)
     b = load_rich_dotctx(str(pkg)).reasoner
     assert b.user_render is None
     assert b.system_render is not None
-    assert get_renderer(b.system_render)({"text": "T"}) == "Input\n<<<\nT\n>>>"
+    assert get_renderer(b.system_render)({"text": "T"}) == "Input\n<<<\nT\n>>>\n"
 
 
 # --------------------------------------------------------------------------- #
@@ -395,6 +443,21 @@ def test_non_numeric_string_setting_errors(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="max_rounds"):
         load_dotctx(str(pkg))
+
+
+def test_explicit_zero_rich_settings_do_not_fall_through_to_camel_case(tmp_path: Path) -> None:
+    pkg = _write_pkg(
+        tmp_path, "zero.ctx",
+        "name: rich.zero\nmodel: m\nmax_rounds: 0\nmaxRounds: 12\n"
+        "max_tokens: 0\nmaxTokens: 120\noutput_retries: 0\noutputRetries: 2\n"
+        "temperature: 0\n",
+        {"prompt.j2": "hello"},
+    )
+    b = load_dotctx(str(pkg))
+    assert b.max_rounds == 0
+    assert b.max_tokens == 0
+    assert b.output_retries == 0
+    assert b.temperature == 0.0
 
 
 # --------------------------------------------------------------------------- #
@@ -586,9 +649,9 @@ def test_complete_reasoner_uses_rendered_user_turn_and_max_tokens() -> None:
     assert "temperature" not in call
     msgs = call["messages"]
     assert msgs[0]["role"] == "system"
-    assert msgs[0]["content"] == "You are a careful research agent.\nPersona: skeptic"
+    assert msgs[0]["content"] == "You are a careful research agent.\nPersona: skeptic\n"
     assert msgs[1]["role"] == "user"
-    assert msgs[1]["content"] == "Question: why?"
+    assert msgs[1]["content"] == "Question: why?\n"
 
 
 def test_complete_reasoner_keeps_value_as_user_turn_without_user_render() -> None:
@@ -597,5 +660,5 @@ def test_complete_reasoner_keeps_value_as_user_turn_without_user_render() -> Non
     out = run(complete_reasoner(rich.reasoner, {"audience": "execs", "text": "T"}, acompletion=rec))
     assert out.reply == "done"
     msgs = rec.calls[0]["messages"]
-    assert msgs[0]["content"] == "Summarize for execs."
+    assert msgs[0]["content"] == "Summarize for execs.\n"
     assert msgs[1]["content"] == json.dumps({"audience": "execs", "text": "T"})

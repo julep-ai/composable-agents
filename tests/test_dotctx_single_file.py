@@ -88,7 +88,7 @@ def test_no_frontmatter_is_template_only_with_defaults(tmp_path: Path) -> None:
     assert b.model == "claude-sonnet-4"         # CA default applies
     assert b.temperature is None and b.max_rounds is None
     assert b.system_render is not None and b.user_render is None
-    assert get_renderer(b.system_render)({"text": "T"}) == "Summarize T briefly."
+    assert get_renderer(b.system_render)({"text": "T"}) == "Summarize T briefly.\n"
 
 
 def test_frontmatter_without_markers_is_system_template(tmp_path: Path) -> None:
@@ -96,7 +96,7 @@ def test_frontmatter_without_markers_is_system_template(tmp_path: Path) -> None:
     b = load_dotctx(str(_write(tmp_path, "plainbody.ctx", content)))
     assert b.name == "single.plainbody" and b.model == "m"
     assert b.system_render is not None and b.user_render is None
-    assert get_renderer(b.system_render)({"x": "1"}) == "Just a body 1."
+    assert get_renderer(b.system_render)({"x": "1"}) == "Just a body 1.\n"
 
 
 def test_unknown_frontmatter_keys_error(tmp_path: Path) -> None:
