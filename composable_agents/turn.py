@@ -133,6 +133,11 @@ def controller_turn(
     mode = EnforcementMode.coerce(mode)
     unconstrained = granted is None
     granted_set = set(granted or [])
+    note_fn: Optional[Callable[..., Any]] = None
+    if cfg.round_note is not None:
+        from .registry import DEFAULT_REGISTRY
+
+        note_fn = DEFAULT_REGISTRY.get_pure(cfg.round_note)
 
     def denial_to_halt(denial: Optional[CallDenial]) -> Optional[Halt]:
         # STRICT: denial halts; DEV: warn-but-allow (record prodGap, proceed).
@@ -148,6 +153,17 @@ def controller_turn(
             "input": state.last,
             "trace": [t.to_json() for t in state.trace],
         }
+        if note_fn is not None:
+            # Fresh each round from loop state only; deterministic under Temporal
+            # replay because the function is a registered pure.
+            note = note_fn({
+                "round": state.round,
+                "maxRounds": cfg.max_rounds,
+                "spent": state.spent,
+                "callCounts": dict(state.call_counts),
+            })
+            if note is not None:
+                payload["note"] = note
         if cfg.ctx is not None and cfg.ctx.scope in TRANSCRIPT_SCOPES:
             # Transcript plan: deterministic, ref-bearing, computed in workflow
             # code. Hydration/budget/summarization happen in the invoke_reasoner

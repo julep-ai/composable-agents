@@ -202,6 +202,7 @@ class AgentConfig:
     summarizer: Optional[str] = None
     native_tools: bool = False
     require_tool_call: bool = False
+    round_note: Optional[str] = None
 
     @staticmethod
     def from_json(d: dict[str, Any]) -> "AgentConfig":
@@ -222,6 +223,7 @@ class AgentConfig:
             require_tool_call=bool(
                 d.get("requireToolCall", d.get("require_tool_call", False))
             ),
+            round_note=d.get("roundNote", d.get("round_note")),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -249,6 +251,8 @@ class AgentConfig:
             out["nativeTools"] = True
         if self.require_tool_call:
             out["requireToolCall"] = True
+        if self.round_note is not None:
+            out["roundNote"] = self.round_note
         return out
 
     @staticmethod

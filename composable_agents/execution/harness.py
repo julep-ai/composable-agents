@@ -822,6 +822,8 @@ class _TemporalEnv:
                 config["ctx"] = app_config["ctx"]
             if "summarizer" in app_config:
                 config["summarizer"] = app_config["summarizer"]
+            if "roundNote" in app_config:
+                config["roundNote"] = app_config["roundNote"]
 
             tools = app_config.get("tools") if "tools" in app_config else None
             granted_tools = None if tools is None else list(tools)
@@ -2023,6 +2025,10 @@ class AgentWorkflow:
 
         await self._start_trajectory(inp)
 
+        note_fn: Optional[Callable[..., Any]] = None
+        if cfg.round_note is not None:
+            note_fn = _DEFAULT_REGISTRY.get_pure(cfg.round_note)
+
         while True:
             if state.round >= cfg.max_rounds:
                 terminal = al.terminal_result("max_rounds", state)
@@ -2053,11 +2059,27 @@ class AgentWorkflow:
             if cfg.ctx is not None and cfg.ctx.scope in TRANSCRIPT_SCOPES:
                 transcript_plan = transcript_for(state, cfg.ctx, input=inp.input)
 
+            controller_value: dict[str, Any] = {
+                "input": state.last,
+                "trace": [t.to_json() for t in state.trace],
+            }
+            if note_fn is not None:
+                # Fresh each round from loop state only; deterministic under
+                # Temporal replay because the function is a registered pure.
+                note = note_fn({
+                    "round": state.round,
+                    "maxRounds": cfg.max_rounds,
+                    "spent": state.spent,
+                    "callCounts": dict(state.call_counts),
+                })
+                if note is not None:
+                    controller_value["note"] = note
+
             reply = await workflow.execute_activity(
                 invokeReasoner,
                 InvokeReasonerInput(
                     reasoner=inp.controller,
-                    value={"input": state.last, "trace": [t.to_json() for t in state.trace]},
+                    value=controller_value,
                     cid=f"{inp.session_id}-round-{state.round}",
                     principal=inp.principal,
                     transcript=transcript_plan,

@@ -577,6 +577,8 @@ class DbosEnv:
                 config["ctx"] = app_config["ctx"]
             if "summarizer" in app_config:
                 config["summarizer"] = app_config["summarizer"]
+            if "roundNote" in app_config:
+                config["roundNote"] = app_config["roundNote"]
 
             tools = app_config.get("tools") if "tools" in app_config else None
             granted_tools = None if tools is None else list(tools)

@@ -460,6 +460,7 @@ class Node:
     # reasoner for SUMMARY scope. Conditional keys: absent == today's LOCAL.
     ctx: Optional[ContextPolicy] = None
     summarizer: Optional[str] = None
+    round_note: Optional[str] = None
     source: Optional["SourceSpan"] = None
 
     # ----- traversal -------------------------------------------------------- #
@@ -530,6 +531,8 @@ class Node:
                 out["ctx"] = self.ctx.to_json()
             if self.summarizer is not None:
                 out["summarizer"] = self.summarizer
+            if self.round_note is not None:
+                out["roundNote"] = self.round_note
         if self.pure is not None:
             out["pure"] = self.pure
         if self.op in (Op.ARR, Op.LOOP) and self.args is not None:
@@ -583,6 +586,7 @@ class Node:
             max_rounds=d.get("maxRounds", d.get("max_rounds")),
             ctx=ContextPolicy.from_json(d["ctx"]) if d.get("ctx") else None,
             summarizer=d.get("summarizer"),
+            round_note=d.get("roundNote", d.get("round_note")),
             prompt=d.get("channel"),
         )
 
