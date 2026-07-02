@@ -2027,7 +2027,7 @@ class AgentWorkflow:
 
         note_fn: Optional[Callable[..., Any]] = None
         if cfg.round_note is not None:
-            note_fn = _DEFAULT_REGISTRY.get_pure(cfg.round_note)
+            note_fn = _get_pure_from_registry(cfg.round_note)
 
         while True:
             if state.round >= cfg.max_rounds:
@@ -2073,7 +2073,7 @@ class AgentWorkflow:
                     "callCounts": dict(state.call_counts),
                 })
                 if note is not None:
-                    controller_value["note"] = note
+                    controller_value[al.ROUND_NOTE_KEY] = note
 
             reply = await workflow.execute_activity(
                 invokeReasoner,

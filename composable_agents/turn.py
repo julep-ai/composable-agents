@@ -23,6 +23,7 @@ from .agent_loop import (
     CallDenial,
     DEFAULT_TOOL_COST,
     Decision,
+    ROUND_NOTE_KEY,
     TraceEntry,
     ToolCaller,
     action_cost,
@@ -125,6 +126,7 @@ def controller_turn(
     mode: EnforcementMode,
     prod_gap: list[str],
     run_input: Any = None,
+    get_pure: Optional[Callable[[str], Callable[..., Any]]] = None,
 ) -> Step:
     """One agent round, lifted verbatim from drive_agent_loop's while-body.
 
@@ -135,9 +137,12 @@ def controller_turn(
     granted_set = set(granted or [])
     note_fn: Optional[Callable[..., Any]] = None
     if cfg.round_note is not None:
-        from .registry import DEFAULT_REGISTRY
+        if get_pure is not None:
+            note_fn = get_pure(cfg.round_note)
+        else:
+            from .registry import DEFAULT_REGISTRY
 
-        note_fn = DEFAULT_REGISTRY.get_pure(cfg.round_note)
+            note_fn = DEFAULT_REGISTRY.get_pure(cfg.round_note)
 
     def denial_to_halt(denial: Optional[CallDenial]) -> Optional[Halt]:
         # STRICT: denial halts; DEV: warn-but-allow (record prodGap, proceed).
@@ -163,8 +168,10 @@ def controller_turn(
                 "callCounts": dict(state.call_counts),
             })
             if note is not None:
-                # The LLM message path renders this as a trailing system line.
-                payload["note"] = note
+                # The LLM prompt path (execution/llm.py _messages) renders this
+                # reserved key as a trailing system line; namespaced so ordinary
+                # reasoner "note" business fields are never injected.
+                payload[ROUND_NOTE_KEY] = note
         if cfg.ctx is not None and cfg.ctx.scope in TRANSCRIPT_SCOPES:
             # Transcript plan: deterministic, ref-bearing, computed in workflow
             # code. Hydration/budget/summarization happen in the invoke_reasoner

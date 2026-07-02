@@ -42,6 +42,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Optional
 
+from ..agent_loop import ROUND_NOTE_KEY
 from ..dotctx import Reasoner, get_reasoner
 from ..errors import ResilienceExhausted
 from ..prompt import rendered_reasoner_for, rendered_user_for
@@ -205,7 +206,8 @@ def _messages(
     """System (optionally with an injected schema block), the materialized
     transcript turns when given, then the user turn: a rendered ``user_text``
     when given, else the value as a user turn. A mapping value with a non-empty
-    string ``note`` renders that note as a trailing system line."""
+    string under the reserved ``ROUND_NOTE_KEY`` renders that note as a
+    trailing system line and omits the reserved key from the user turn."""
     system_text = system or ""
     if schema_hint is not None:
         block = (
@@ -219,15 +221,23 @@ def _messages(
         messages.append({"role": "system", "content": system_text})
     if transcript:
         messages.extend(_transcript_messages(transcript))
+    round_note: Optional[str] = None
+    if isinstance(value, Mapping):
+        candidate = value.get(ROUND_NOTE_KEY)
+        if isinstance(candidate, str) and candidate:
+            round_note = candidate
+
     if user_text is not None:
         user = user_text
+    elif isinstance(value, Mapping) and ROUND_NOTE_KEY in value:
+        # Strip the reserved round-note key from the model-facing user JSON;
+        # it is delivered as the trailing system line below, never as content.
+        user = json.dumps({k: v for k, v in value.items() if k != ROUND_NOTE_KEY})
     else:
         user = value if isinstance(value, str) else json.dumps(value)
     messages.append({"role": "user", "content": user})
-    if isinstance(value, Mapping):
-        note = value.get("note")
-        if isinstance(note, str) and note:
-            messages.append({"role": "system", "content": note})
+    if round_note is not None:
+        messages.append({"role": "system", "content": round_note})
     return messages
 
 

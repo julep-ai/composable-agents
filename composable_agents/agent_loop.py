@@ -50,6 +50,12 @@ from .staged import admit_plan, estimate_cost, validate_plan
 from .validate import Diagnostic
 
 
+# Reserved controller-payload key carrying the per-round note (Task 7).
+# Namespaced so an ordinary reasoner's business "note" field never renders
+# as a system instruction (the prompt path opts in on THIS key only).
+ROUND_NOTE_KEY = "__round_note__"
+
+
 # --------------------------------------------------------------------------- #
 # Round decisions.
 # --------------------------------------------------------------------------- #
@@ -569,6 +575,7 @@ async def drive_agent_loop(
     granted_subflows: Optional[set[str]] = None,
     contracts: Optional[AgentContractMap] = None,
     state: Optional[AgentState] = None,
+    get_pure: Optional[Callable[[str], Callable[..., Any]]] = None,
 ) -> dict[str, Any]:
     """Run the bounded agent loop locally with injected async effects."""
     from .turn import controller_turn, drive, make_finalize, pre_round
@@ -580,6 +587,7 @@ async def drive_agent_loop(
         cfg=cfg, invoke_controller=invoke_controller, call_tool=call_tool,
         run_subflow=run_subflow, granted=granted, granted_subflows=granted_subflows,
         contracts=contracts, mode=mode, prod_gap=prod_gap, run_input=input,
+        get_pure=get_pure,
     )
     return await drive(step, state, halt=pre_round(cfg), finalize=make_finalize(prod_gap))
 

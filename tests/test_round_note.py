@@ -6,13 +6,17 @@ from collections.abc import Awaitable, Callable, Mapping
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from composable_agents import AgentConfig, app, deploy
-from composable_agents.agent_loop import AgentState, drive_agent_loop
+from composable_agents.agent_loop import ROUND_NOTE_KEY, AgentState, drive_agent_loop
 from composable_agents.dotctx import Reasoner
+from composable_agents.execution.cma import drive_cma_agent_loop
 from composable_agents.execution.llm import complete_reasoner
 from composable_agents.ir import Node
 from composable_agents.prompt import register_renderer
 from composable_agents.registry import DEFAULT_REGISTRY, PureEntry, RendererEntry
+from cma_fakes import FakeCMASession
 from conftest import read_snapshot
 
 
@@ -85,8 +89,8 @@ def test_round_note_std_pure_adds_remaining_rounds_note_each_round() -> None:
     )
 
     assert out["status"] == "done"
-    assert payloads[0]["note"] == "[REMAINING ROUNDS: 5]"
-    assert payloads[1]["note"] == "[REMAINING ROUNDS: 4]"
+    assert payloads[0][ROUND_NOTE_KEY] == "[REMAINING ROUNDS: 5]"
+    assert payloads[1][ROUND_NOTE_KEY] == "[REMAINING ROUNDS: 4]"
 
 
 def test_complete_reasoner_appends_round_note_after_rendered_user_turn() -> None:
@@ -106,7 +110,7 @@ def test_complete_reasoner_appends_round_note_after_rendered_user_turn() -> None
             system="system prompt",
             user_render=renderer_name,
         )
-        value = {"input": "question", "trace": [], "note": note}
+        value = {"input": "question", "trace": [], ROUND_NOTE_KEY: note}
 
         out = asyncio.run(
             complete_reasoner(reasoner, value, acompletion=_capture_completion(captured))
@@ -125,7 +129,7 @@ def test_complete_reasoner_appends_round_note_after_rendered_user_turn() -> None
 def test_complete_reasoner_appends_round_note_without_user_renderer() -> None:
     captured: dict[str, Any] = {}
     note = "[REMAINING ROUNDS: 3]"
-    value = {"input": "question", "trace": [], "note": note}
+    value = {"input": "question", "trace": [], ROUND_NOTE_KEY: note}
 
     reasoner = Reasoner(
         name="tests.round_note.plain_reasoner",
@@ -138,7 +142,7 @@ def test_complete_reasoner_appends_round_note_without_user_renderer() -> None:
     assert out.reply == "ok"
     assert captured["messages"] == [
         {"role": "system", "content": "system prompt"},
-        {"role": "user", "content": json.dumps(value)},
+        {"role": "user", "content": json.dumps({"input": "question", "trace": []})},
         {"role": "system", "content": note},
     ]
 
@@ -152,9 +156,10 @@ def test_complete_reasoner_omits_trailing_round_note_when_note_absent_or_none() 
 
     for value in (
         {"input": "question", "trace": []},
-        {"input": "question", "trace": [], "note": None},
+        {"input": "question", "trace": [], ROUND_NOTE_KEY: None},
     ):
         captured: dict[str, Any] = {}
+        expected_user = json.dumps({k: v for k, v in value.items() if k != ROUND_NOTE_KEY})
 
         out = asyncio.run(
             complete_reasoner(reasoner, value, acompletion=_capture_completion(captured))
@@ -163,8 +168,27 @@ def test_complete_reasoner_omits_trailing_round_note_when_note_absent_or_none() 
         assert out.reply == "ok"
         assert captured["messages"] == [
             {"role": "system", "content": "system prompt"},
-            {"role": "user", "content": json.dumps(value)},
+            {"role": "user", "content": expected_user},
         ]
+
+
+def test_complete_reasoner_does_not_inject_business_note_field() -> None:
+    captured: dict[str, Any] = {}
+    value = {"text": "summarize", "note": "draft only"}
+    reasoner = Reasoner(
+        name="tests.round_note.business_note",
+        model="anthropic:claude-test",
+        system="system prompt",
+    )
+    out = asyncio.run(
+        complete_reasoner(reasoner, value, acompletion=_capture_completion(captured))
+    )
+    assert out.reply == "ok"
+    # No trailing system line; the business "note" stays intact in the user JSON.
+    assert captured["messages"] == [
+        {"role": "system", "content": "system prompt"},
+        {"role": "user", "content": json.dumps(value)},
+    ]
 
 
 def test_round_note_none_return_omits_note_key() -> None:
@@ -200,7 +224,7 @@ def test_round_note_none_return_omits_note_key() -> None:
 
     assert out["status"] == "done"
     assert payloads
-    assert all("note" not in payload for payload in payloads)
+    assert all(ROUND_NOTE_KEY not in payload for payload in payloads)
 
 
 def test_round_note_ctx_contains_only_round_budget_spend_and_call_counts() -> None:
@@ -240,7 +264,7 @@ def test_round_note_ctx_contains_only_round_budget_spend_and_call_counts() -> No
         _restore_pure(name, previous)
 
     assert out["status"] == "done"
-    assert payloads[0]["note"] == "captured"
+    assert payloads[0][ROUND_NOTE_KEY] == "captured"
     assert seen == [
         {
             "round": 2,
@@ -315,3 +339,19 @@ def test_deploy_app_round_note_validates_registration_and_pins_hash() -> None:
 
     assert not any(diag.code == "UNKNOWN_PURE" for diag in valid.diagnostics)
     assert valid.artifact_components["pureSourceHashes"][ROUND_NOTE_NAME].startswith("pure:")
+
+
+def test_cma_backend_refuses_round_note() -> None:
+    async def call_tool(_tool: str, _value: Any, _cid: str) -> Any:
+        raise AssertionError("must not run")
+
+    session = FakeCMASession([])
+    with pytest.raises(ValueError, match="round_note is not supported on the CMA backend"):
+        asyncio.run(
+            drive_cma_agent_loop(
+                input="q",
+                cfg=AgentConfig(max_rounds=3, round_note=ROUND_NOTE_NAME),
+                session=session,
+                call_tool=call_tool,
+            )
+        )

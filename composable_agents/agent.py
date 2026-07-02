@@ -926,6 +926,7 @@ class Agent(FlowLike[Any, Any]):
                     granted=self._granted,
                     granted_subflows=granted_subflows,
                     contracts=contracts,
+                    get_pure=env.get_pure,
                 )
             },
             max_calls=max_call_limits,
