@@ -401,6 +401,7 @@ def _derive_agent_name(
     max_rounds: int,
     instructions: str,
     native_tools: bool = False,
+    require_tool_call: bool = False,
 ) -> str:
     name_parts: dict[str, Any] = {
         "budget_cost": budget_cost,
@@ -411,6 +412,8 @@ def _derive_agent_name(
     }
     if native_tools:
         name_parts["native_tools"] = True
+    if require_tool_call:
+        name_parts["require_tool_call"] = True
     payload = canonical_json(name_parts)
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
     return f"agent-{digest}"
@@ -436,6 +439,7 @@ class Agent(FlowLike[Any, Any]):
         langfuse_export: Optional[
             Callable[[Sequence[ProjectionEvent], str], None]
         ] = None,
+        require_tool_call: bool = False,
     ) -> None:
         """Create an agent facade.
 
@@ -444,6 +448,7 @@ class Agent(FlowLike[Any, Any]):
         distinct agent config in the current process.
         """
         if isinstance(reasoner, Reasoner):
+            require_tool_call = reasoner.require_tool_call
             DEFAULT_REGISTRY.register_reasoner(reasoner)
             # Drive the controller from the object's *provider config*: its model is
             # the provider model id (not its registry name), and its system seeds
@@ -492,6 +497,7 @@ class Agent(FlowLike[Any, Any]):
                 max_rounds=max_rounds,
                 instructions=system,
                 native_tools=native_tools,
+                require_tool_call=require_tool_call,
             )
         else:
             resolved_name = name
@@ -512,6 +518,7 @@ class Agent(FlowLike[Any, Any]):
         self._reasoner_fn = llm or default_local_reasoner
         self._langfuse_export = langfuse_export
         self._native_tools = native_tools
+        self._require_tool_call = require_tool_call
         self._budget = Budget(cost=budget_cost) if budget_cost is not None else None
         self._mode = EnforcementMode.coerce(mode)
         self._cfg = AgentConfig(
@@ -519,6 +526,7 @@ class Agent(FlowLike[Any, Any]):
             budget=self._budget,
             mode=self._mode,
             native_tools=native_tools,
+            require_tool_call=require_tool_call,
         )
         self._granted = {native_tool.name for native_tool in self._tools}
         self._contracts = {
@@ -591,6 +599,7 @@ class Agent(FlowLike[Any, Any]):
             "instructions": self._instructions,
             "mode": self._mode,
             "native_tools": self._native_tools,
+            "require_tool_call": self._require_tool_call,
             "langfuse_export": self._langfuse_export,
         }
 
@@ -646,7 +655,9 @@ class Agent(FlowLike[Any, Any]):
     ) -> "Agent":
         overrides: dict[str, Any] = {}
         if reasoner is not None:
+            require_tool_call = False
             if isinstance(reasoner, Reasoner):
+                require_tool_call = reasoner.require_tool_call
                 DEFAULT_REGISTRY.register_reasoner(reasoner)
                 # Mirror __init__: drive the controller from the object's provider
                 # model (not its registry name) and seed instructions from its
@@ -655,6 +666,7 @@ class Agent(FlowLike[Any, Any]):
                     instructions = reasoner.system
                 reasoner = reasoner.model
             overrides["reasoner"] = reasoner
+            overrides["require_tool_call"] = require_tool_call
         if max_rounds is not None:
             overrides["max_rounds"] = max_rounds
         if budget_cost is not _KEEP:
@@ -738,6 +750,30 @@ class Agent(FlowLike[Any, Any]):
             target="session",
             mode=self._mode,
         )
+
+    def _facade_result(self, value: dict[str, Any]) -> "Result[Any]":
+        trace = value.get("trace", [])
+        trace_entries = trace if isinstance(trace, list) else []
+        has_successful_tool_call = any(
+            isinstance(entry, dict)
+            and entry.get("decision") == "call"
+            and not entry.get("error")
+            for entry in trace_entries
+        )
+        if (
+            self._cfg.require_tool_call
+            and value.get("status") == "max_rounds"
+            and has_successful_tool_call
+        ):
+            return Result(
+                {
+                    **value,
+                    "status": "done",
+                    "output": None,
+                    "reason": "max_rounds",
+                }
+            )
+        return Result(value)
 
     def _eager_capability_checks(self) -> None:
         tool_names = list(self._tool_names)
@@ -899,7 +935,7 @@ class Agent(FlowLike[Any, Any]):
         result = await interpret(deployment.flow, input, env)
         if self._langfuse_export is not None:
             self._langfuse_export(projection.events(), self._name)
-        return Result(cast("dict[str, Any]", result.value))
+        return self._facade_result(cast("dict[str, Any]", result.value))
 
     async def arun_on_cma(
         self,
@@ -953,7 +989,7 @@ class Agent(FlowLike[Any, Any]):
             custom_tools=custom_tools,
         )
         result = await interpret(deployment.flow, input, cma_env)
-        return Result(cast("dict[str, Any]", result.value))
+        return self._facade_result(cast("dict[str, Any]", result.value))
 
     def run(
         self, input: Any, *, principal: Optional[dict[str, Any]] = None

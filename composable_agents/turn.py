@@ -170,6 +170,21 @@ def controller_turn(
         )
 
         if action.decision.value == "finish":
+            if cfg.require_tool_call and not any(
+                entry.decision == "call" and entry.error is None
+                for entry in state.trace
+            ):
+                reasks = sum(1 for entry in state.trace if entry.decision == "reask")
+                if reasks >= 2:
+                    return Halt(
+                        "controller_error",
+                        reason="require_tool_call: controller never called a tool",
+                    )
+                message = "require_tool_call: reply with a tool call, not text"
+                state.last = {"error": message, "reply": action.payload}
+                state.record(TraceEntry(decision="reask", error=message))
+                state.round += 1
+                return state
             return Halt("done", output=action.payload)
         if action.decision.value == "escalate":
             return Halt("escalated", reason=str(action.payload))

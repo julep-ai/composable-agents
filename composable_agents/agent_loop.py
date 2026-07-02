@@ -201,6 +201,7 @@ class AgentConfig:
     ctx: Optional[ContextPolicy] = None
     summarizer: Optional[str] = None
     native_tools: bool = False
+    require_tool_call: bool = False
 
     @staticmethod
     def from_json(d: dict[str, Any]) -> "AgentConfig":
@@ -218,6 +219,9 @@ class AgentConfig:
             ctx=ContextPolicy.from_json(d["ctx"]) if d.get("ctx") else None,
             summarizer=d.get("summarizer"),
             native_tools=bool(d.get("nativeTools", d.get("native_tools", False))),
+            require_tool_call=bool(
+                d.get("requireToolCall", d.get("require_tool_call", False))
+            ),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -243,6 +247,8 @@ class AgentConfig:
             out["summarizer"] = self.summarizer
         if self.native_tools:
             out["nativeTools"] = True
+        if self.require_tool_call:
+            out["requireToolCall"] = True
         return out
 
     @staticmethod
