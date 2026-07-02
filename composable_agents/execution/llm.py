@@ -79,6 +79,17 @@ def _split_model(model: str, default_provider: str) -> tuple[str, str]:
     return default_provider, model
 
 
+def _effort_for_provider(effort: Optional[str], provider: str) -> Optional[str]:
+    """Clamp CA effort vocabulary to what the provider actually accepts.
+
+    OpenAI's reasoning_effort scale tops out at ``xhigh``; ``max`` is
+    CA/anthropic vocabulary and any-llm forwards it verbatim, so an
+    ``openai:...@max`` reasoner would be a 400 without this."""
+    if effort == "max" and provider == "openai":
+        return "xhigh"
+    return effort
+
+
 def _qos_request_fields(provider: str, qos: QoSTier) -> dict[str, Any]:
     """Provider-specific QoS request kwargs for sync reasoner dispatch."""
     qos = QoSTier(qos)
@@ -284,7 +295,7 @@ async def complete_reasoner(
             messages.append({"role": "user", "content": retry_note})
         effort = reasoner.reasoning_effort
         if effort is not None:
-            kwargs["reasoning_effort"] = effort
+            kwargs["reasoning_effort"] = _effort_for_provider(effort, provider)
         # Thinking modes reject or require fixed sampling params; omit
         # temperature whenever reasoning is actually enabled (mirrors mem-mcp's
         # get_temperature_for_reasoning, in provider-safe form).

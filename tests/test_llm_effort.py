@@ -37,6 +37,21 @@ def test_effort_none_forwarded_temperature_kept() -> None:
     assert seen["temperature"] == 0.2
 
 
+def test_effort_max_clamped_to_xhigh_for_openai() -> None:
+    # OpenAI's reasoning_effort has no "max" (its scale tops out at xhigh) and
+    # any-llm passes the value through verbatim, so CA clamps it (codex review).
+    seen = _run(Reasoner(name="t", model="openai:gpt-4o",
+                         temperature=0.2, reasoning_effort="max"))
+    assert seen["reasoning_effort"] == "xhigh"
+    assert "temperature" not in seen
+
+
+def test_effort_max_untouched_for_other_providers() -> None:
+    seen = _run(Reasoner(name="t", model="anthropic:claude-x",
+                         reasoning_effort="max"))
+    assert seen["reasoning_effort"] == "max"
+
+
 def test_unset_effort_not_sent() -> None:
     seen = _run(Reasoner(name="t", model="openai:gpt-4o", temperature=0.2))
     assert "reasoning_effort" not in seen

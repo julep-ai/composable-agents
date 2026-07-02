@@ -172,6 +172,19 @@ def test_build_request_forwards_effort_and_suppresses_temperature() -> None:
     assert "temperature" not in body
 
 
+def test_build_request_clamps_max_effort_to_xhigh() -> None:
+    # OpenAI's reasoning_effort scale tops out at xhigh; "max" is CA/anthropic
+    # vocabulary and would be rejected verbatim (codex review).
+    provider = openai_batch.OpenAIBatchProvider(client=FakeOpenAIClient())
+    reasoner = Reasoner(
+        name="b", model="openai:gpt-x", system="s", reasoning_effort="max",
+    )
+
+    body = provider.build_request("c1", reasoner, "hello")["body"]
+
+    assert body["reasoning_effort"] == "xhigh"
+
+
 def test_build_request_effort_none_keeps_temperature() -> None:
     provider = openai_batch.OpenAIBatchProvider(client=FakeOpenAIClient())
     reasoner = Reasoner(
