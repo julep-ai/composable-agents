@@ -65,6 +65,17 @@ def _module(root: str | None = None) -> Module:
     return build_module(cfg)
 
 
+def _eval_env_vars(env: str) -> dict[str, str]:
+    """Env vars for ``$env`` resolution during eval; empty when no ca project."""
+    try:
+        cfg = load_config(Path("."))
+        if env in cfg.envs:
+            return dict(cfg.envs[env].vars)
+    except Exception:  # noqa: BLE001 - a .ctx outside any ca project resolves to {}
+        pass
+    return {}
+
+
 @app.command("ls")
 def ls(
     selector: str = typer.Argument("", help="Selection expression (default: all)."),
@@ -265,6 +276,53 @@ def test_cmd(
         typer.echo(" ".join(cmd))
         raise typer.Exit(0)
     raise typer.Exit(_subprocess.run(cmd, cwd=str(cfg.root)).returncode)
+
+
+@app.command("eval")
+def eval_cmd(
+    ctx_path: str = typer.Argument(..., help="Path to a .ctx package with an eval.py."),
+    env: str = typer.Option("local", "--env", help="Environment name (for $env resolution)."),
+    limit: int = typer.Option(-1, "--limit", help="Max samples (-1 = all)."),
+    json_out: str = typer.Option("", "--json", help="Write the JSON report to this path."),
+    baseline: str = typer.Option("", "--baseline", help="Baseline report JSON to diff against."),
+) -> None:
+    """Run a .ctx package's eval suite with a threshold + baseline regression gate."""
+    from composable_agents.ca.evalrun import diff_reports, run_eval_sync
+
+    env_vars = _eval_env_vars(env)
+    try:
+        report = run_eval_sync(ctx_path, env_vars=env_vars, limit=(None if limit < 0 else limit))
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from None
+
+    for s in report.scores:
+        mark = "pass" if s.passed else "FAIL"
+        typer.echo(f"  {s.id:32} {s.score:.3f} {mark}")
+    verdict = "PASS" if report.passed else "BELOW THRESHOLD"
+    typer.echo(
+        f"{report.ctx}  model={report.model}  mean={report.mean:.3f}  "
+        f"threshold={report.threshold:.3f}  {verdict}"
+    )
+    if json_out:
+        Path(json_out).write_text(_json.dumps(report.to_json(), indent=2), encoding="utf-8")
+
+    if baseline:
+        base = _json.loads(Path(baseline).read_text(encoding="utf-8"))
+        regressed, mean_regressed = diff_reports(base, report.to_json())
+        if regressed or mean_regressed:
+            typer.echo("regression vs baseline:", err=True)
+            for sid in regressed:
+                typer.echo(f"  REGRESSED {sid}", err=True)
+            if mean_regressed:
+                typer.echo(
+                    f"  mean dropped {float(base.get('mean', 0.0)):.3f} -> {report.mean:.3f}",
+                    err=True,
+                )
+            raise typer.Exit(3)
+
+    if not report.passed:
+        raise typer.Exit(2)
 
 
 @app.command("trace")
