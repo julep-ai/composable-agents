@@ -227,6 +227,7 @@ class TraceEntry:
     input_ref: Optional[str] = None
     output_ref: Optional[str] = None
     schema_ref: Optional[str] = None
+    error: Optional[str] = None
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {"decision": self.decision, "cost": self.cost}
@@ -240,6 +241,8 @@ class TraceEntry:
             out["outputRef"] = self.output_ref
         if self.schema_ref is not None:
             out["schemaRef"] = self.schema_ref
+        if self.error is not None:
+            out["error"] = self.error
         return out
 
     @staticmethod
@@ -250,6 +253,7 @@ class TraceEntry:
             input_ref=d.get("inputRef", d.get("input_ref")),
             output_ref=d.get("outputRef", d.get("output_ref")),
             schema_ref=d.get("schemaRef", d.get("schema_ref")),
+            error=d.get("error"),
         )
 
 

@@ -10,6 +10,7 @@ the design note).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, Optional, Union
@@ -30,6 +31,8 @@ from .agent_loop import (
 )
 from .kinds import EnforcementMode
 from .transcript import TRANSCRIPT_SCOPES, split_summary_reply, transcript_for
+
+logger = logging.getLogger("composable_agents.turn")
 
 
 @dataclass(frozen=True)
@@ -177,10 +180,16 @@ def controller_turn(
             call_input = action.payload.get("input")
             if call_input is None:
                 call_input = state.last
-            out = await call_tool(tool, call_input)
+            error: Optional[str] = None
+            try:
+                out = await call_tool(tool, call_input)
+            except Exception as exc:  # noqa: BLE001
+                error = repr(exc)
+                logger.warning("tool %r failed: %s", tool, error)
+                out = {"error": error, "tool": tool}
             state.charge(cost)
             state.last = out
-            state.record(TraceEntry(decision="call", ref=tool, cost=cost))
+            state.record(TraceEntry(decision="call", ref=tool, cost=cost, error=error))
         else:  # sub
             ref = action.payload["ref"]
             halt = denial_to_halt(authorize_subflow(ref, granted_subflows=granted_subflows))
@@ -191,10 +200,24 @@ def controller_turn(
             sub_input = action.payload.get("input")
             if sub_input is None:
                 sub_input = state.last
-            out = await run_subflow(ref, sub_input)
+            error = None
+            try:
+                out = await run_subflow(ref, sub_input)
+            except Exception as exc:  # noqa: BLE001
+                error = repr(exc)
+                logger.warning("subflow %r failed: %s", ref, error)
+                out = {"error": error, "tool": ref}
             state.charge(cost)
             state.last = out
-            state.record(TraceEntry(decision="sub", ref=ref, shape=action.payload.get("shape"), cost=cost))
+            state.record(
+                TraceEntry(
+                    decision="sub",
+                    ref=ref,
+                    shape=action.payload.get("shape"),
+                    cost=cost,
+                    error=error,
+                )
+            )
 
         state.round += 1
         return state
