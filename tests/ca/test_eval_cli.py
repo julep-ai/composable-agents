@@ -18,6 +18,7 @@ from composable_agents.dotctx_evals import (
     MockToolConfig,
     Sample,
     stop_after_turns,
+    stop_when_non_tool,
     stop_when_terminal_tool,
 )
 from composable_agents.dotctx_rich import load_rich_dotctx
@@ -173,6 +174,17 @@ class SearchThenRecordFake:
             hit = "alice" if "alice" in text else "none"
             return _tool_call_completion("c2", "record_memory", json.dumps({"content": hit}))
         return _parsed({"done": True})
+
+
+class CallThenTextFake:
+    """Calls a tool once, then answers in natural language (content) — the normal
+    completion path for a native-tool agent. Must FINISH cleanly, never halt as
+    controller_error, and must expose the final text to a content scorer."""
+
+    async def __call__(self, **kwargs):
+        if any(m.get("role") == "tool" for m in kwargs["messages"]):
+            return _content("all done, stored it")
+        return _tool_call_completion("c1", "record_memory", '{"content": "hi"}')
 
 
 def test_single_shot_report_shape_and_pass() -> None:
@@ -476,5 +488,76 @@ def test_cli_broken_eval_yaml_is_exit_4(tmp_path: Path) -> None:
         "def score(_input, _output, _expected):\n"
         "    return 1.0\n",
         encoding="utf-8",
+    )
+    assert cli.main(["eval", str(ctx)]) == 4
+
+
+def test_tool_loop_finishes_on_natural_language_reply() -> None:
+    # finding #1: a native-tools loop whose model finishes with a text message must
+    # FINISH (status 'done'), not halt as 'controller_error'. The final content is
+    # normalized to the single-shot {"content": ...} shape so a content scorer reads it.
+    rich = load_rich_dotctx(str(FIXTURES / "execute_eval.ctx"), env={})
+    sample = Sample(
+        name="text_finish",
+        input={"task": "store then answer"},
+        mock_tools={"record_memory": {"ok": True}},
+        stop_on=stop_when_non_tool(),
+    )
+    result = run(_run_tool_loop(rich, sample, CallThenTextFake()))
+
+    assert result["status"] == "done"
+    assert result["output"] == {"content": "all done, stored it"}
+    calls = [e["ref"] for e in result["trace"] if e["decision"] == "call"]
+    assert "record_memory" in calls  # the tool call really happened first
+
+
+def test_resolve_mock_default_beats_responses_when_match_defined() -> None:
+    # finding #2: when `match` is defined but nothing matches, the documented
+    # `default` wins — `responses` is used ONLY when no `match` is defined.
+    from composable_agents.ca.evalrun import _resolve_mock
+
+    counters: dict[str, int] = {}
+    cfg = MockToolConfig(
+        match=[({"query": "hits"}, ["a", "b"])],
+        responses=[["SEQ"]],
+        default=["DEF"],
+    )
+    assert _resolve_mock(cfg, {"query": "hits"}, counters, "search") == ["a", "b"]
+    assert _resolve_mock(cfg, {"query": "miss"}, counters, "search") == ["DEF"]
+
+    # responses cycle only when NO match is defined
+    seq = MockToolConfig(responses=[["one"], ["two"]], default=["DEF"])
+    assert _resolve_mock(seq, {"x": 1}, counters, "seq") == ["one"]
+    assert _resolve_mock(seq, {"x": 1}, counters, "seq") == ["two"]
+    assert _resolve_mock(seq, {"x": 1}, counters, "seq") == ["one"]
+
+
+def test_cli_user_score_error_is_exit_4(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # finding #3: an exception from user score()/sample() code is a SETUP error
+    # (exit 4), not a crash and not a below-threshold (exit 2) result.
+    ctx = tmp_path / "scoreboom.ctx"
+    ctx.mkdir()
+    (ctx / "settings.yaml").write_text('model: "openai/gpt-eval@low"\n', encoding="utf-8")
+    (ctx / "prompt.j2").write_text(
+        "<<< role:system >>>\nHi.\n\n<<< role:user >>>\nT: {{ task | default('', true) }}\n",
+        encoding="utf-8",
+    )
+    (ctx / "eval.yaml").write_text(
+        "threshold: 0.5\n\ndatasets:\n  - file: eval.py\n    format: py\n",
+        encoding="utf-8",
+    )
+    (ctx / "eval.py").write_text(
+        "from dotctx.eval_types import Sample\n\n"
+        "def sample(limit: int = -1):\n"
+        "    return [Sample(name='s', input={'task': 'x'})]\n\n"
+        "def score(_input, _output, _expected):\n"
+        "    raise KeyError('boom')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "composable_agents.ca.evalrun._resolve_acompletion",
+        lambda a: SingleShotFake('{"x": 1}'),
     )
     assert cli.main(["eval", str(ctx)]) == 4

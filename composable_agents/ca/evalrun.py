@@ -93,6 +93,11 @@ def _resolve_mock(
         for pattern, response in mock.match:
             if all(margs.get(k) == v for k, v in pattern.items()):
                 return response
+        if mock.match:
+            # `match` patterns were defined but none matched -> documented
+            # `default`. `responses` is used ONLY when no `match` is defined
+            # (per MockToolConfig), so it must not shadow `default` here.
+            return mock.default
         if mock.responses:
             idx = counters.get(key, 0)
             counters[key] = idx + 1
@@ -181,6 +186,12 @@ async def _run_tool_loop(
         max_rounds=max_rounds,
         native_tools=True,
         require_tool_call=reasoner.require_tool_call,
+        # A native-tool agent's normal completion is: call tools, then answer in
+        # prose. Under strict control that final text reply is a malformed reply
+        # and the run halts as `controller_error` before the sample's StopFn is
+        # consulted. Permissive control FINISHES on it instead, so eval replays
+        # the normal completion path (finding: strict mode mis-scored completion).
+        permissive_controller=True,
     )
     granted = set(reasoner.tools)
     mock_tools = sample.mock_tools or {}
@@ -252,6 +263,12 @@ async def _run_tool_loop(
             ]
         else:
             round_call_ids = []
+            # A content-only (natural-language) final reply: normalize to the
+            # same {"content": ...} shape single-shot runs use, so a content
+            # scorer reads the model's actual final message and the loop FINISHES
+            # here (permissive control) instead of halting as controller_error.
+            if isinstance(reply, str):
+                return {"output": {"content": reply}}
         return reply
 
     return await drive_agent_loop(
@@ -288,8 +305,11 @@ async def run_eval(
     reasoner = rich.reasoner
     resolved = _resolve_acompletion(acompletion)
 
-    raw = module.sample(-1 if limit is None else limit)
-    loaded_samples = await raw if inspect.isawaitable(raw) else raw
+    try:
+        raw = module.sample(-1 if limit is None else limit)
+        loaded_samples = await raw if inspect.isawaitable(raw) else raw
+    except Exception as exc:  # noqa: BLE001 - user eval.py sample() code -> setup error (exit 4)
+        raise ValueError(f"eval sample() failed: {exc!r}") from exc
     samples: Sequence[Sample] = loaded_samples
 
     is_tool_loop = bool(reasoner.tools)
@@ -301,9 +321,12 @@ async def run_eval(
                 output = await _run_tool_loop(rich, sample, resolved)
             else:
                 output = await _run_single_shot(reasoner, sample, resolved)
-            raw_score = module.score(sample.input, output, sample.expected)
-            value = await raw_score if inspect.isawaitable(raw_score) else raw_score
-            s = float(value)
+            try:
+                raw_score = module.score(sample.input, output, sample.expected)
+                value = await raw_score if inspect.isawaitable(raw_score) else raw_score
+                s = float(value)
+            except Exception as exc:  # noqa: BLE001 - user eval.py score() code -> setup error (exit 4)
+                raise ValueError(f"eval score() failed: {exc!r}") from exc
             name = sample.name
             sid = name if name else f"sample-{index}"
             return SampleScore(id=sid, score=s, passed=s >= threshold)
