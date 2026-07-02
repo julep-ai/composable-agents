@@ -228,6 +228,35 @@ def _parse_reply(completion: Any, *, expect_json: bool) -> Any:
         return content
 
 
+def _parse_tool_call_arguments(arguments: Any) -> Any:
+    if not isinstance(arguments, str):
+        return arguments
+    try:
+        return json.loads(arguments)
+    except (json.JSONDecodeError, ValueError):
+        return arguments
+
+
+def _parse_completion_reply(completion: Any, *, expect_json: bool) -> tuple[Any, int]:
+    """Extract native tool-call replies before falling back to text/JSON."""
+    message = completion.choices[0].message
+    tool_calls = getattr(message, "tool_calls", None)
+    if tool_calls:
+        return {
+            "tool_calls": [
+                {
+                    "id": getattr(tool_call, "id", None),
+                    "tool": getattr(getattr(tool_call, "function", None), "name", None),
+                    "input": _parse_tool_call_arguments(
+                        getattr(getattr(tool_call, "function", None), "arguments", "")
+                    ),
+                }
+                for tool_call in tool_calls
+            ]
+        }, len(tool_calls)
+    return _parse_reply(completion, expect_json=expect_json), 0
+
+
 def _add_tokens(a: int | None, b: int | None) -> int | None:
     if a is None:
         return b
@@ -266,12 +295,18 @@ async def complete_reasoner(
     default_provider: str = DEFAULT_PROVIDER,
     transcript: Optional[list[dict[str, Any]]] = None,
     dispatch: ReasonerDispatch = _DEFAULT_REASONER_DISPATCH,
+    tools: Optional[list[dict[str, Any]]] = None,
+    parallel_tool_calls: Optional[bool] = None,
 ) -> LlmResult:
     """One model call for ``reasoner`` against ``value``, returning its parsed reply.
 
     ``transcript`` is the materialized neutral turn list for transcript-scoped
     app rounds (agent-transcripts design); it renders as provider messages
-    between the system prompt and the user turn."""
+    between the system prompt and the user turn.
+
+    ``tools`` and ``parallel_tool_calls`` pass native provider tool definitions
+    through to any-llm. When tools are present, schema guidance remains prompt-
+    injected and ``response_format`` is omitted from that request."""
     if dispatch.qos == QoSTier.BATCH:
         raise ValueError("BATCH must not reach complete_reasoner")
 
@@ -284,15 +319,19 @@ async def complete_reasoner(
     # mem-mcp's declarative json_object mode claims the kwarg only when no
     # reply schema does (the schema path wins; the call never carries both).
     json_object = schema is None and reasoner.response_format == "json_object"
+    has_tools = bool(tools)
 
     async def call(*, native: bool, retry_note: Optional[str] = None) -> Any:
-        if native and schema is not None:
+        # Native tool rounds cannot carry response_format; keep schema guidance
+        # in the prompt so FINISH replies can still parse on non-tool rounds.
+        native_response_format = native and not has_tools
+        if native_response_format and schema is not None:
             messages = _messages(
                 reasoner.system, value,
                 schema_hint=None, user_text=user_text, transcript=transcript,
             )
             kwargs: dict[str, Any] = {"response_format": _response_format(schema)}
-        elif native and json_object:
+        elif native_response_format and json_object:
             # No schema to inject; the prompt self-instructs JSON. The
             # non-native reissue below simply drops the kwarg. Replies stay
             # raw text either way — json_object constrains the provider, not
@@ -308,6 +347,10 @@ async def complete_reasoner(
                 schema_hint=schema, user_text=user_text, transcript=transcript,
             )
             kwargs = {}
+        if has_tools:
+            kwargs["tools"] = tools
+            if parallel_tool_calls is not None:
+                kwargs["parallel_tool_calls"] = parallel_tool_calls
         if retry_note is not None:
             messages.append({"role": "user", "content": retry_note})
         effort = reasoner.reasoning_effort
@@ -330,7 +373,7 @@ async def complete_reasoner(
 
     async def dispatch_once(retry_note: Optional[str] = None) -> Any:
         nonlocal fallback_reason, native_ok
-        if (schema is not None or json_object) and native_ok \
+        if not has_tools and (schema is not None or json_object) and native_ok \
                 and provider not in _PROMPT_FALLBACK_PROVIDERS:
             try:
                 return await call(native=True, retry_note=retry_note)
@@ -356,7 +399,9 @@ async def complete_reasoner(
     completion = await dispatch_once()
     # Usage accumulates over every attempt — re-asks cost tokens too.
     pt, ct, tt = _usage_of(completion)
-    reply = _parse_reply(completion, expect_json=schema is not None)
+    reply, native_tool_calls = _parse_completion_reply(
+        completion, expect_json=schema is not None
+    )
     while (
         schema is not None
         and not isinstance(reply, dict)
@@ -375,7 +420,7 @@ async def complete_reasoner(
         )
         apt, act, att = _usage_of(completion)
         pt, ct, tt = _add_tokens(pt, apt), _add_tokens(ct, act), _add_tokens(tt, att)
-        reply = _parse_reply(completion, expect_json=True)
+        reply, native_tool_calls = _parse_completion_reply(completion, expect_json=True)
     ended = time.time()
     meta = LlmCallMeta(
         served_model=_served_model_of(completion, model),
@@ -384,6 +429,7 @@ async def complete_reasoner(
         started_at=started, ended_at=ended,
         response_format_fallback=fallback_reason,
         output_retries_used=retries_used,
+        native_tool_calls=native_tool_calls,
     )
     return LlmResult(reply=reply, meta=meta)
 
@@ -424,6 +470,9 @@ def make_llm_caller(
         principal: Optional[dict[str, Any]] = None,
         transcript: Optional[list[dict[str, Any]]] = None,
         dispatch: ReasonerDispatch = _DEFAULT_REASONER_DISPATCH,
+        *,
+        tools: Optional[list[dict[str, Any]]] = None,
+        parallel_tool_calls: Optional[bool] = None,
     ) -> Any:
         return await complete_reasoner(
             reasoner, value,
@@ -431,6 +480,8 @@ def make_llm_caller(
             default_provider=default_provider,
             transcript=transcript,
             dispatch=dispatch,
+            tools=tools,
+            parallel_tool_calls=parallel_tool_calls,
         )
 
     return caller
@@ -533,6 +584,9 @@ def make_resilient_llm_caller(
         principal: Optional[dict[str, Any]] = None,
         transcript: Optional[list[dict[str, Any]]] = None,
         dispatch: ReasonerDispatch = _DEFAULT_REASONER_DISPATCH,
+        *,
+        tools: Optional[list[dict[str, Any]]] = None,
+        parallel_tool_calls: Optional[bool] = None,
     ) -> Any:
         resolved = _resolve_acompletion(acompletion)
         attempts: list[AttemptRecord] = []
@@ -560,6 +614,8 @@ def make_resilient_llm_caller(
                         acompletion=resolved, default_provider=default_provider,
                         transcript=transcript,
                         dispatch=dispatch,
+                        tools=tools,
+                        parallel_tool_calls=parallel_tool_calls,
                     )
                     reply = result.reply
                 except Exception as exc:
