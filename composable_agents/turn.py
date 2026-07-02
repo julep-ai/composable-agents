@@ -163,6 +163,7 @@ def controller_turn(
                 "callCounts": dict(state.call_counts),
             })
             if note is not None:
+                # The LLM message path renders this as a trailing system line.
                 payload["note"] = note
         if cfg.ctx is not None and cfg.ctx.scope in TRANSCRIPT_SCOPES:
             # Transcript plan: deterministic, ref-bearing, computed in workflow

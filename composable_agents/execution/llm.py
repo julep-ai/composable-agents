@@ -39,7 +39,7 @@ import dataclasses
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Optional
 
 from ..dotctx import Reasoner, get_reasoner
@@ -204,7 +204,8 @@ def _messages(
 ) -> list[dict[str, Any]]:
     """System (optionally with an injected schema block), the materialized
     transcript turns when given, then the user turn: a rendered ``user_text``
-    when given, else the value as a user turn."""
+    when given, else the value as a user turn. A mapping value with a non-empty
+    string ``note`` renders that note as a trailing system line."""
     system_text = system or ""
     if schema_hint is not None:
         block = (
@@ -223,6 +224,10 @@ def _messages(
     else:
         user = value if isinstance(value, str) else json.dumps(value)
     messages.append({"role": "user", "content": user})
+    if isinstance(value, Mapping):
+        note = value.get("note")
+        if isinstance(note, str) and note:
+            messages.append({"role": "system", "content": note})
     return messages
 
 

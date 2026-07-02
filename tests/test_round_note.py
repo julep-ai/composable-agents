@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+import json
+from collections.abc import Awaitable, Callable, Mapping
+from types import SimpleNamespace
 from typing import Any
 
 from composable_agents import AgentConfig, app, deploy
 from composable_agents.agent_loop import AgentState, drive_agent_loop
+from composable_agents.dotctx import Reasoner
+from composable_agents.execution.llm import complete_reasoner
 from composable_agents.ir import Node
-from composable_agents.registry import DEFAULT_REGISTRY, PureEntry
+from composable_agents.prompt import register_renderer
+from composable_agents.registry import DEFAULT_REGISTRY, PureEntry, RendererEntry
 from conftest import read_snapshot
 
 
@@ -24,6 +29,36 @@ def _restore_pure(name: str, previous: PureEntry | None) -> None:
     DEFAULT_REGISTRY.pures.pop(name, None)
     if previous is not None:
         DEFAULT_REGISTRY.pures[name] = previous
+
+
+def _replace_renderer(name: str, fn: Callable[[Mapping[str, Any]], str]) -> RendererEntry | None:
+    previous = DEFAULT_REGISTRY.renderers.pop(name, None)
+    register_renderer(name, fn)
+    return previous
+
+
+def _restore_renderer(name: str, previous: RendererEntry | None) -> None:
+    DEFAULT_REGISTRY.renderers.pop(name, None)
+    if previous is not None:
+        DEFAULT_REGISTRY.renderers[name] = previous
+
+
+def _fake_completion(content: str = "ok") -> SimpleNamespace:
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=content, parsed=None),
+            )
+        ],
+    )
+
+
+def _capture_completion(captured: dict[str, Any]) -> Callable[..., Awaitable[Any]]:
+    async def fake_acompletion(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _fake_completion()
+
+    return fake_acompletion
 
 
 def test_round_note_std_pure_adds_remaining_rounds_note_each_round() -> None:
@@ -52,6 +87,84 @@ def test_round_note_std_pure_adds_remaining_rounds_note_each_round() -> None:
     assert out["status"] == "done"
     assert payloads[0]["note"] == "[REMAINING ROUNDS: 5]"
     assert payloads[1]["note"] == "[REMAINING ROUNDS: 4]"
+
+
+def test_complete_reasoner_appends_round_note_after_rendered_user_turn() -> None:
+    renderer_name = "tests.round_note.user_render"
+    note = "[REMAINING ROUNDS: 3]"
+
+    def render_user(ctx: Mapping[str, Any]) -> str:
+        return f"Rendered input: {ctx['input']}"
+
+    previous = _replace_renderer(renderer_name, render_user)
+    try:
+        captured: dict[str, Any] = {}
+
+        reasoner = Reasoner(
+            name="tests.round_note.rendered_reasoner",
+            model="anthropic:claude-test",
+            system="system prompt",
+            user_render=renderer_name,
+        )
+        value = {"input": "question", "trace": [], "note": note}
+
+        out = asyncio.run(
+            complete_reasoner(reasoner, value, acompletion=_capture_completion(captured))
+        )
+    finally:
+        _restore_renderer(renderer_name, previous)
+
+    assert out.reply == "ok"
+    assert captured["messages"] == [
+        {"role": "system", "content": "system prompt"},
+        {"role": "user", "content": "Rendered input: question"},
+        {"role": "system", "content": note},
+    ]
+
+
+def test_complete_reasoner_appends_round_note_without_user_renderer() -> None:
+    captured: dict[str, Any] = {}
+    note = "[REMAINING ROUNDS: 3]"
+    value = {"input": "question", "trace": [], "note": note}
+
+    reasoner = Reasoner(
+        name="tests.round_note.plain_reasoner",
+        model="anthropic:claude-test",
+        system="system prompt",
+    )
+
+    out = asyncio.run(complete_reasoner(reasoner, value, acompletion=_capture_completion(captured)))
+
+    assert out.reply == "ok"
+    assert captured["messages"] == [
+        {"role": "system", "content": "system prompt"},
+        {"role": "user", "content": json.dumps(value)},
+        {"role": "system", "content": note},
+    ]
+
+
+def test_complete_reasoner_omits_trailing_round_note_when_note_absent_or_none() -> None:
+    reasoner = Reasoner(
+        name="tests.round_note.no_note_reasoner",
+        model="anthropic:claude-test",
+        system="system prompt",
+    )
+
+    for value in (
+        {"input": "question", "trace": []},
+        {"input": "question", "trace": [], "note": None},
+    ):
+        captured: dict[str, Any] = {}
+
+        out = asyncio.run(
+            complete_reasoner(reasoner, value, acompletion=_capture_completion(captured))
+        )
+
+        assert out.reply == "ok"
+        assert captured["messages"] == [
+            {"role": "system", "content": "system prompt"},
+            {"role": "user", "content": json.dumps(value)},
+        ]
 
 
 def test_round_note_none_return_omits_note_key() -> None:
