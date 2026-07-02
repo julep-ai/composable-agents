@@ -27,8 +27,11 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import html
+import json
 import os
 import re
+import textwrap
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional, Sequence
 
@@ -112,12 +115,68 @@ class RichDotctx:
 
 
 # --------------------------------------------------------------------------- #
+# mem-mcp's custom Jinja filters (dotctx filters.py, ported 1:1 for the pure
+# ones — briefs/draft.ctx alone uses `to_json` 20+ times, and jinja resolves
+# filter names at compile time, so loading needs them registered). The
+# file/token filters (import_yaml, import_text, count_tokens, truncate_tokens)
+# need mem-mcp's base_dir / tiktoken wiring; they register as render-time
+# teaching errors so those templates still load (G-8: loud, never silent).
+# --------------------------------------------------------------------------- #
+def _filter_as_xml(value: Any, tag: str = "data") -> str:
+    content = str(value) if value is not None else ""
+    return f"<{tag}>{html.escape(content, quote=False)}</{tag}>"
+
+
+def _filter_as_codeblock(value: str, lang: str = "") -> str:
+    return f"```{lang}\n{value}\n```"
+
+
+def _filter_numbered_list(items: Sequence[Any], start: int = 1) -> str:
+    return "\n".join(f"{i}. {item}" for i, item in enumerate(items, start))
+
+
+def _filter_bulleted_list(items: Sequence[Any], bullet: str = "-") -> str:
+    return "\n".join(f"{bullet} {item}" for item in items)
+
+
+def _filter_to_json(value: Any, indent: Optional[int] = None) -> str:
+    return json.dumps(value, indent=indent, ensure_ascii=False)
+
+
+def _unsupported_filter(name: str) -> Callable[..., str]:
+    def raise_unsupported(*_args: Any, **_kwargs: Any) -> str:
+        raise ValueError(
+            f"the {name!r} dotctx filter is declared but not renderable here: "
+            "it needs mem-mcp's base_dir/tokenizer wiring, which is not part "
+            "of the Phase 2 loading surface"
+        )
+
+    return raise_unsupported
+
+
+_MEMMCP_FILTERS: dict[str, Callable[..., Any]] = {
+    "as_xml": _filter_as_xml,
+    "as_codeblock": _filter_as_codeblock,
+    "numbered_list": _filter_numbered_list,
+    "bulleted_list": _filter_bulleted_list,
+    "dedent": textwrap.dedent,
+    "to_json": _filter_to_json,
+    "from_json": json.loads,
+    **{
+        name: _unsupported_filter(name)
+        for name in ("import_yaml", "import_text", "count_tokens", "truncate_tokens")
+    },
+}
+
+
+# --------------------------------------------------------------------------- #
 # Templates -> registered renderers.
 # --------------------------------------------------------------------------- #
 def _template_renderer(
     package: str, role: str, source: str
 ) -> Callable[[Mapping[str, Any]], str]:
     env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+    env.filters.update(_MEMMCP_FILTERS)
     template = env.from_string(source)
 
     def render(ctx: Mapping[str, Any]) -> str:
@@ -154,21 +213,34 @@ def _split_role_markers(source: str, origin: str) -> Optional[tuple[str, Optiona
     system template). v1 accepts exactly the shapes a ``messages/`` bundle
     accepts: one system section optionally followed by one user section;
     anything else is rejected loudly with the file name and offending role.
-    Content before the first marker must be whitespace or Jinja comments only;
-    it is prepended to the system section source so headers like
-    ``{# AI-ANCHOR #}`` stay in the hashed template while rendering to nothing.
+    Content before the first marker must be whitespace, Jinja comments, or
+    bare ``#`` comment lines only. Jinja comments are prepended to the system
+    section source so headers like ``{# AI-ANCHOR #}`` stay in the hashed
+    template while rendering to nothing; ``#`` header lines (mem-mcp's
+    AI-ANCHOR convention in a few real ``.j2`` files, e.g.
+    ``clustering/cluster_label.ctx``) are dropped — mem-mcp discards all
+    pre-marker content, and prepending them would render visible text.
     """
     parts = _ROLE_MARKER_RE.split(source)
     if len(parts) == 1:
         return None
 
     pre = parts[0]
-    if _JINJA_COMMENT_RE.sub("", pre).strip():
-        raise ValueError(
-            f"dotctx template {origin!r} has content before the first "
-            "<<< role:... >>> marker; only whitespace or Jinja comments "
-            "({# ... #}) may precede it"
-        )
+    # Mask Jinja comments (newlines kept, other chars removed) so the per-line
+    # checks below only see text living outside {# ... #}.
+    masked = _JINJA_COMMENT_RE.sub(lambda m: re.sub(r"[^\n]", "", m.group(0)), pre)
+    kept: list[str] = []
+    for raw_line, visible in zip(pre.splitlines(), masked.splitlines(), strict=True):
+        text = visible.strip()
+        if not text:
+            kept.append(raw_line)  # whitespace / Jinja-comment content
+        elif not text.startswith("#"):
+            raise ValueError(
+                f"dotctx template {origin!r} has content before the first "
+                "<<< role:... >>> marker; only whitespace, Jinja comments "
+                "({# ... #}), or # comment lines may precede it"
+            )
+    pre = "\n".join(kept)
 
     # parts: [pre, role1, content1, role2, content2, ...]; contents stripped
     # like mem-mcp's _parse_role_markers.

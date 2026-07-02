@@ -286,6 +286,47 @@ def test_role_markers_leading_noncomment_text_errors(tmp_path: Path) -> None:
         load_rich_dotctx(str(pkg))
 
 
+def test_role_markers_leading_hash_comment_lines_dropped(tmp_path: Path) -> None:
+    # mem-mcp's clustering/cluster_label.ctx opens with a bare `# AI-ANCHOR`
+    # line before the first marker; mem-mcp discards pre-marker content, so
+    # such comment headers load but never render (unlike Jinja comments they
+    # would otherwise render as visible text). Real prose still errors.
+    pkg = _write_pkg(
+        tmp_path, "markers_hash.ctx", "name: markers.hash\nmodel: m\n",
+        {"prompt.j2": "# AI-ANCHOR: prompt: header\n{# kept #}\n<<< role:system >>>\nS {{ x }}\n"},
+    )
+    rich = load_rich_dotctx(str(pkg))
+    assert get_renderer(rich.renderer_names["system"])({"x": "1"}) == "S 1"
+
+
+def test_memmcp_pure_filters_render(tmp_path: Path) -> None:
+    # mem-mcp's dotctx registers custom Jinja filters (filters.py); the pure
+    # ones are ported 1:1 — briefs/draft.ctx alone uses `to_json` 20+ times.
+    pkg = _write_pkg(
+        tmp_path, "filters.ctx", "name: markers.filters\nmodel: m\n",
+        {"prompt.j2": "<<< role:system >>>\n{{ data | to_json }}\n{{ items | numbered_list }}\n"
+                      "{{ note | as_xml('note') }}"},
+    )
+    rich = load_rich_dotctx(str(pkg))
+    out = get_renderer(rich.renderer_names["system"])(
+        {"data": {"k": "v"}, "items": ["a", "b"], "note": "x < y"}
+    )
+    assert out == '{"k": "v"}\n1. a\n2. b\n<note>x &lt; y</note>'
+
+
+def test_memmcp_file_filters_load_but_teach_at_render(tmp_path: Path) -> None:
+    # import_yaml/import_text (and the tiktoken pair) need mem-mcp's
+    # base_dir/tokenizer wiring; templates using them must still LOAD (jinja
+    # resolves filter names at compile time), while rendering is a loud error.
+    pkg = _write_pkg(
+        tmp_path, "filefilters.ctx", "name: markers.filefilters\nmodel: m\n",
+        {"prompt.j2": "<<< role:system >>>\n{{ 'x.yaml' | import_yaml }}\n"},
+    )
+    rich = load_rich_dotctx(str(pkg))
+    with pytest.raises(ValueError, match="import_yaml"):
+        get_renderer(rich.renderer_names["system"])({})
+
+
 def test_prompt_without_role_markers_stays_whole_system_template(tmp_path: Path) -> None:
     # Bare <<< / >>> lines (no role:) are content, not markers: the whole file
     # remains the system template exactly as before.
