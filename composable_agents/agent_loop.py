@@ -33,7 +33,7 @@ import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, Protocol
 
 from .capabilities import Budget, CapabilityManifest
 from .contracts import (
@@ -82,6 +82,17 @@ class RoundAction:
     @property
     def is_terminal(self) -> bool:
         return self.decision in (Decision.FINISH, Decision.ESCALATE, Decision.CONTROLLER_ERROR)
+
+
+class ToolCaller(Protocol):
+    def __call__(
+        self,
+        name: str,
+        value: Any,
+        *,
+        call_index: Optional[int] = None,
+    ) -> Awaitable[Any]:
+        ...
 
 
 def interpret_reasoner_reply(
@@ -542,7 +553,7 @@ async def drive_agent_loop(
     input: Any,
     cfg: AgentConfig,
     invoke_controller: Callable[[dict[str, Any]], Awaitable[Any]],
-    call_tool: Callable[[str, Any], Awaitable[Any]],
+    call_tool: ToolCaller,
     run_subflow: Optional[Callable[[str, Any], Awaitable[Any]]] = None,
     granted: Optional[set[str]] = None,
     granted_subflows: Optional[set[str]] = None,

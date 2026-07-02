@@ -880,6 +880,144 @@ async def _pure_drift_fails_before_effect(env):
     assert effects["count"] == 0
 
 
+async def _agent_native_tools_call_many(env):
+    tool_defs = [
+        {
+            "type": "function",
+            "function": {
+                "name": "srv/double",
+                "description": "",
+                "parameters": {"type": "number"},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "srv/inc",
+                "description": "",
+                "parameters": {"type": "number"},
+            },
+        },
+    ]
+    agents = {
+        "native_multi_ctrl": {
+            "config": {
+                "nativeTools": True,
+                "maxRounds": 4,
+                "budget": {"cost": 1000},
+            },
+            "grantedTools": ["srv/double", "srv/inc"],
+            "grantedContracts": {
+                "srv/double": {"effect": "read", "idempotency": "native"},
+                "srv/inc": {"effect": "read", "idempotency": "native"},
+            },
+            "toolDefs": tool_defs,
+        }
+    }
+    seen_values = []
+    effects = []
+
+    async def native_llm(reasoner, value, principal, transcript, dispatch, *, tools=None):  # noqa: ANN001
+        del principal, transcript, dispatch
+        assert reasoner.name == "native_multi_ctrl"
+        assert tools == tool_defs
+        seen_values.append(value)
+        if len(seen_values) == 1:
+            return {
+                "tool_calls": [
+                    {"id": "a", "tool": "srv/double", "input": 2},
+                    {"id": "b", "tool": "srv/inc", "input": 4},
+                ]
+            }
+        assert value["input"] == [
+            {"id": "a", "tool": "srv/double", "output": 4},
+            {"id": "b", "tool": "srv/inc", "output": 5},
+        ]
+        return {"done": True, "output": value["input"]}
+
+    async def counted_mcp(server, tool, value, idempotency_key):  # noqa: ANN001
+        effects.append((server, tool, value, idempotency_key))
+        return await _mcp(server, tool, value, idempotency_key)
+
+    async with _worker(
+        env,
+        task_queue="ca-agent-native-tools",
+        agents=agents,
+        llm=native_llm,
+        mcp_call=counted_mcp,
+        extra_reasoners=(Reasoner(name="native_multi_ctrl", model="test", system="native"),),
+    ):
+        sid = f"native-tools-{uuid.uuid4()}"
+        res = await env.client.execute_workflow(
+            AgentWorkflow.run,
+            AgentInput(
+                controller="native_multi_ctrl",
+                session_id=sid,
+                input={"task": "go"},
+                policy=ExecutionPolicy().to_json(),
+            ),
+            id=sid,
+            task_queue="ca-agent-native-tools",
+        )
+
+    assert res["status"] == "done", res
+    assert res["rounds"] == 1, res
+    assert res["output"] == [
+        {"id": "a", "tool": "srv/double", "output": 4},
+        {"id": "b", "tool": "srv/inc", "output": 5},
+    ]
+    assert [(t["decision"], t["ref"], t["callId"]) for t in res["trace"]] == [
+        ("call", "srv/double", "a"),
+        ("call", "srv/inc", "b"),
+    ]
+    # Both calls are READ-effect and run concurrently, so activity arrival
+    # order is nondeterministic; assert the sibling cids, not their order.
+    assert sorted(item[3] for item in effects) == [
+        f"{sid}-call-0-0",
+        f"{sid}-call-0-1",
+    ]
+    assert seen_values[1]["input"] == res["output"]
+
+
+async def _agent_native_tools_without_tool_defs_fails(env):
+    async with _worker(
+        env,
+        task_queue="ca-agent-native-tools-missing",
+        extra_reasoners=(
+            Reasoner(name="native_missing_defs_ctrl", model="test", system="native"),
+        ),
+    ):
+        sid = f"native-tools-missing-{uuid.uuid4()}"
+        with pytest.raises(WorkflowFailureError) as raised:
+            await env.client.execute_workflow(
+                AgentWorkflow.run,
+                AgentInput(
+                    controller="native_missing_defs_ctrl",
+                    session_id=sid,
+                    input={"task": "go"},
+                    config={
+                        "nativeTools": True,
+                        "maxRounds": 1,
+                        "budget": {"cost": 1000},
+                    },
+                    granted_tools=["srv/double"],
+                    policy=ExecutionPolicy().to_json(),
+                    resolve_spec=False,
+                ),
+                id=sid,
+                task_queue="ca-agent-native-tools-missing",
+            )
+
+    cause = raised.value.__cause__
+    while cause is not None and not (
+        isinstance(cause, ApplicationError) and cause.type == "ValidationError"
+    ):
+        cause = cause.__cause__
+
+    assert isinstance(cause, ApplicationError)
+    assert "native_tools on a durable backend needs provider tool definitions" in str(cause)
+
+
 async def _run_all():
     async with await WorkflowEnvironment.start_time_skipping() as env:
         await _pipeline_and_reasoner(env)
@@ -896,6 +1034,8 @@ async def _run_all():
         await _agent_session_store_fencing(env)
         await _agent_trace_fidelity(env)
         await _pure_drift_fails_before_effect(env)
+        await _agent_native_tools_call_many(env)
+        await _agent_native_tools_without_tool_defs_fails(env)
 
 
 def test_temporal_end_to_end():

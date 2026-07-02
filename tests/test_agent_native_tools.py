@@ -4,6 +4,7 @@ import asyncio
 from typing import Any
 
 from composable_agents import Agent
+from composable_agents import app, arr, recv, register_pure, scan, seq
 from composable_agents import tool
 from composable_agents.agent_loop import (
     DEFAULT_THINK_COST,
@@ -124,9 +125,19 @@ def test_trace_entry_call_id_json_round_trips_and_loads_old_format() -> None:
     assert restored_old.to_json() == old_format
 
 
+def _native_tools_session_result(value: dict[str, Any]) -> tuple[None, dict[str, Any]]:
+    return None, value
+
+
+register_pure(
+    "tests.agent_native_tools.session_result",
+    _native_tools_session_result,
+)
+
+
 def test_call_many_executes_two_tools_and_threads_ordered_observations() -> None:
     seen_payloads: list[dict[str, Any]] = []
-    calls: list[tuple[str, Any]] = []
+    calls: list[tuple[str, Any, int | None]] = []
 
     async def invoke_controller(payload: dict[str, Any]) -> Any:
         seen_payloads.append(payload)
@@ -143,8 +154,13 @@ def test_call_many_executes_two_tools_and_threads_ordered_observations() -> None
         ]
         return {"done": True, "output": {"seen": payload["input"]}}
 
-    async def call_tool(actual_tool: str, value: Any) -> Any:
-        calls.append((actual_tool, value))
+    async def call_tool(
+        actual_tool: str,
+        value: Any,
+        *,
+        call_index: int | None = None,
+    ) -> Any:
+        calls.append((actual_tool, value, call_index))
         return {"tool": actual_tool, "n": value["n"]}
 
     out = asyncio.run(
@@ -164,7 +180,7 @@ def test_call_many_executes_two_tools_and_threads_ordered_observations() -> None
     assert out["rounds"] == 1
     assert out["cost"] == (2 * DEFAULT_THINK_COST) + (2 * DEFAULT_TOOL_COST)
     assert out["output"] == {"seen": expected_last}
-    assert calls == [("left", {"n": 1}), ("right", {"n": 2})]
+    assert calls == [("left", {"n": 1}, 0), ("right", {"n": 2}, 1)]
     assert seen_payloads[1]["input"] == expected_last
     assert out["trace"] == [
         {
@@ -197,7 +213,13 @@ def test_call_many_read_tools_run_concurrently() -> None:
             }
         return {"done": True, "output": payload["input"]}
 
-    async def call_tool(actual_tool: str, value: Any) -> Any:
+    async def call_tool(
+        actual_tool: str,
+        value: Any,
+        *,
+        call_index: int | None = None,
+    ) -> Any:
+        del call_index
         events.append(f"{actual_tool}:started")
         started.add(actual_tool)
         if started == {"read-a", "read-b"}:
@@ -241,7 +263,13 @@ def test_call_many_write_starts_after_read_finishes_even_when_emitted_first() ->
             }
         return {"done": True, "output": payload["input"]}
 
-    async def call_tool(actual_tool: str, value: Any) -> Any:
+    async def call_tool(
+        actual_tool: str,
+        value: Any,
+        *,
+        call_index: int | None = None,
+    ) -> Any:
+        del call_index
         events.append(f"{actual_tool}:started")
         if actual_tool == "read":
             await asyncio.sleep(0.01)
@@ -276,7 +304,13 @@ def test_call_many_denial_halts_whole_round_before_any_tool_executes() -> None:
             ]
         }
 
-    async def call_tool(actual_tool: str, value: Any) -> Any:
+    async def call_tool(
+        actual_tool: str,
+        value: Any,
+        *,
+        call_index: int | None = None,
+    ) -> Any:
+        del call_index
         calls.append((actual_tool, value))
         return value
 
@@ -313,7 +347,13 @@ def test_call_many_one_failing_tool_only_errors_that_observation() -> None:
             }
         return {"done": True, "output": {"final": payload["input"]}}
 
-    async def call_tool(actual_tool: str, value: Any) -> Any:
+    async def call_tool(
+        actual_tool: str,
+        value: Any,
+        *,
+        call_index: int | None = None,
+    ) -> Any:
+        del call_index
         if actual_tool == "fail":
             raise exc
         return {"value": value}
@@ -422,3 +462,68 @@ def test_agent_facade_passes_provider_tool_defs_only_when_native_tools_enabled()
     assert legacy_result["status"] == "done"
     assert legacy_result["output"] == "legacy-ok"
     assert "tools" not in legacy_payloads[0]
+
+
+def test_agent_open_local_session_passes_provider_tool_defs_for_native_tools() -> None:
+    from composable_agents.agent import provider_tool_defs
+    from conftest import run
+
+    @tool(effect="read", idempotent=True, name="native_session_left")
+    def left(value: dict[str, int]) -> dict[str, int]:
+        return {"left": value["n"]}
+
+    @tool(effect="read", idempotent=True, name="native_session_right")
+    def right(value: dict[str, int]) -> dict[str, int]:
+        return {"right": value["n"]}
+
+    expected_defs = provider_tool_defs([left, right])
+    payloads: list[dict[str, Any]] = []
+
+    def llm(_reasoner_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        payloads.append(payload)
+        assert payload["tools"] == expected_defs
+        if len(payloads) == 1:
+            return {
+                "tool_calls": [
+                    {"id": "a", "tool": left.name, "input": {"n": 1}},
+                    {"id": "b", "tool": right.name, "input": {"n": 2}},
+                ]
+            }
+        return {"done": True, "output": payload["input"]}
+
+    async def main() -> None:
+        agent = Agent(
+            "m",
+            tools=[left, right],
+            name="agent_native_tools_session",
+            native_tools=True,
+            llm=llm,
+        )
+        session = scan(
+            seq(
+                recv("in"),
+                app("agent_native_tools_session"),
+                arr("tests.agent_native_tools.session_result"),
+            ),
+            init=None,
+            in_channel="in",
+            out_channel="out",
+        )
+        handle = await agent.open(session=session, backend="local")
+        agen = handle.events()
+        await handle.send({"task": "go"})
+        emitted = None
+        for _ in range(100):
+            event = await asyncio.wait_for(agen.__anext__(), timeout=1.0)
+            if event.is_emit:
+                emitted = event.payload
+                break
+        assert emitted is not None
+        assert emitted["status"] == "done"
+        assert emitted["output"] == [
+            {"id": "a", "tool": left.name, "output": {"left": 1}},
+            {"id": "b", "tool": right.name, "output": {"right": 2}},
+        ]
+        await handle.close()
+
+    run(main())

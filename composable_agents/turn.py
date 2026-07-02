@@ -24,6 +24,7 @@ from .agent_loop import (
     DEFAULT_TOOL_COST,
     Decision,
     TraceEntry,
+    ToolCaller,
     action_cost,
     authorize_call,
     authorize_subflow,
@@ -116,7 +117,7 @@ def controller_turn(
     *,
     cfg: AgentConfig,
     invoke_controller: Callable[[dict[str, Any]], Awaitable[Any]],
-    call_tool: Callable[[str, Any], Awaitable[Any]],
+    call_tool: ToolCaller,
     run_subflow: Optional[Callable[[str, Any], Awaitable[Any]]],
     granted: Optional[set[str]],
     granted_subflows: Optional[set[str]],
@@ -204,7 +205,7 @@ def controller_turn(
                     call_input = state.last
                 error: Optional[str] = None
                 try:
-                    out = await call_tool(tool, call_input)
+                    out = await call_tool(tool, call_input, call_index=index)
                 except Exception as exc:  # noqa: BLE001
                     error = repr(exc)
                     logger.warning("tool %r failed: %s", tool, error)

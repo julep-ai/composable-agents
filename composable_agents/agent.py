@@ -839,7 +839,13 @@ class Agent(FlowLike[Any, Any]):
                 return reply.reply
             return reply
 
-        async def call_tool(name: str, value: Any) -> Any:
+        async def call_tool(
+            name: str,
+            value: Any,
+            *,
+            call_index: Optional[int] = None,
+        ) -> Any:
+            del call_index
             if name not in tool_fns:
                 return {
                     "error": f"tool {name!r} unavailable (dev mode: not a registered tool of this agent)"
@@ -1002,6 +1008,7 @@ class Agent(FlowLike[Any, Any]):
                 native_tool.name: native_tool.bound_tool
                 for native_tool in self._tools
             }
+            native_tool_defs = provider_tool_defs(self._tools) if self._cfg.native_tools else None
             max_call_limits = (
                 session_deployment.capabilities.max_call_limits()
                 if session_deployment.capabilities is not None
@@ -1014,14 +1021,25 @@ class Agent(FlowLike[Any, Any]):
                 contracts.setdefault(tool_name, {})["maxCalls"] = limit
 
             async def invoke_controller(payload: dict[str, Any]) -> Any:
-                reply = self._reasoner_fn(self._name, payload)
+                controller_payload = (
+                    {**payload, "tools": native_tool_defs}
+                    if native_tool_defs is not None
+                    else payload
+                )
+                reply = self._reasoner_fn(self._name, controller_payload)
                 if inspect.isawaitable(reply):
                     reply = await reply
                 if isinstance(reply, LlmResult):
                     return reply.reply
                 return reply
 
-            async def call_tool(name: str, value: Any) -> Any:
+            async def call_tool(
+                name: str,
+                value: Any,
+                *,
+                call_index: Optional[int] = None,
+            ) -> Any:
+                del call_index
                 if name not in tool_fns:
                     return {
                         "error": (
