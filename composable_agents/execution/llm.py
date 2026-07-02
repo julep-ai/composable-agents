@@ -149,9 +149,10 @@ def _ref_label(ref: Optional[dict[str, Any]]) -> str:
 def _transcript_messages(transcript: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Map neutral transcript turns to provider messages (reference mapping).
 
-    Assistant action turns render as assistant text and tool results as
-    user-visible text — replayed turns carry no provider tool-call ids, so
-    the OpenAI-style ``tool`` role cannot be used. System turns (the elision
+    Assistant action turns with provider tool-call ids round-trip as native
+    tool calls, and matching tool results use the OpenAI-style ``tool`` role.
+    Id-less assistant action turns still render as assistant text, and id-less
+    tool results still render as user-visible text. System turns (the elision
     marker / running summary) pass through as system messages.
     """
     out: list[dict[str, Any]] = []
@@ -160,7 +161,27 @@ def _transcript_messages(transcript: list[dict[str, Any]]) -> list[dict[str, Any
         content = turn.get("content")
         text = content if isinstance(content, str) else json.dumps(content, sort_keys=True)
         label = _ref_label(turn.get("ref"))
-        if role == "assistant" and label:
+        if role == "assistant" and turn.get("tool_calls"):
+            calls: list[dict[str, Any]] = []
+            for call in turn["tool_calls"]:
+                copied = dict(call)
+                function = dict(copied.get("function", {}))
+                if not function.get("arguments"):
+                    function["arguments"] = (
+                        json.dumps(content, sort_keys=True) if content is not None else "{}"
+                    )
+                copied["function"] = function
+                calls.append(copied)
+            out.append({"role": "assistant", "content": None, "tool_calls": calls})
+        elif role == "tool" and "tool_call_id" in turn:
+            out.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": turn["tool_call_id"],
+                    "content": text,
+                }
+            )
+        elif role == "assistant" and label:
             text = f"[called {label}]" if content is None else f"[called {label}] {text}"
             out.append({"role": "assistant", "content": text})
         elif role == "tool":
