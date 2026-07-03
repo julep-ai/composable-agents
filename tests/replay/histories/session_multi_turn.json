@@ -2,7 +2,7 @@
   "events": [
     {
       "eventId": "1",
-      "eventTime": "2026-07-03T04:07:19.780Z",
+      "eventTime": "2026-07-03T04:46:14.622Z",
       "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
       "workflowExecutionStartedEventAttributes": {
         "workflowType": {
@@ -24,9 +24,9 @@
         "workflowExecutionTimeout": "315360000s",
         "workflowRunTimeout": "315360000s",
         "workflowTaskTimeout": "10s",
-        "originalExecutionRunId": "b3460f94-3a07-4d45-b7f0-ebe7755c5581",
-        "identity": "1564768@Apollo-11",
-        "firstExecutionRunId": "b3460f94-3a07-4d45-b7f0-ebe7755c5581",
+        "originalExecutionRunId": "01c7149c-c994-4e98-9cec-bc5d96f385fb",
+        "identity": "1683980@Apollo-11",
+        "firstExecutionRunId": "01c7149c-c994-4e98-9cec-bc5d96f385fb",
         "attempt": 1,
         "firstWorkflowTaskBackoff": "0s",
         "priority": {}
@@ -34,7 +34,7 @@
     },
     {
       "eventId": "2",
-      "eventTime": "2026-07-03T04:07:19.780Z",
+      "eventTime": "2026-07-03T04:46:14.622Z",
       "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
       "workflowTaskScheduledEventAttributes": {
         "taskQueue": {
@@ -46,27 +46,27 @@
     },
     {
       "eventId": "3",
-      "eventTime": "2026-07-03T04:07:19.782Z",
+      "eventTime": "2026-07-03T04:46:14.623Z",
       "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
       "workflowTaskStartedEventAttributes": {
         "scheduledEventId": "2",
-        "identity": "1564768@Apollo-11",
+        "identity": "1683980@Apollo-11",
         "historySizeBytes": "1955"
       }
     },
     {
       "eventId": "4",
-      "eventTime": "2026-07-03T04:07:19.786Z",
+      "eventTime": "2026-07-03T04:46:14.626Z",
       "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
       "workflowTaskCompletedEventAttributes": {
         "scheduledEventId": "2",
-        "identity": "1564768@Apollo-11",
-        "binaryChecksum": "64a63d1bceb1e19ce9da9b279be077c5",
+        "identity": "1683980@Apollo-11",
+        "binaryChecksum": "dc12da091b9812373a0b755759ec8d1d",
         "sdkMetadata": {
           "coreUsedFlags": [
             3,
-            2,
-            1
+            1,
+            2
           ],
           "sdkName": "temporal-python",
           "sdkVersion": "1.30.0"
@@ -76,16 +76,50 @@
     },
     {
       "eventId": "5",
-      "eventTime": "2026-07-03T04:07:19.786Z",
+      "eventTime": "2026-07-03T04:46:14.626Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "corpus-session"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 2
+      }
+    },
+    {
+      "eventId": "6",
+      "eventTime": "2026-07-03T04:46:14.626Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "5",
+        "identity": "1683980@Apollo-11",
+        "historySizeBytes": "2152"
+      }
+    },
+    {
+      "eventId": "7",
+      "eventTime": "2026-07-03T04:46:14.629Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "5",
+        "identity": "1683980@Apollo-11",
+        "binaryChecksum": "dc12da091b9812373a0b755759ec8d1d",
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "8",
+      "eventTime": "2026-07-03T04:46:14.629Z",
       "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED",
       "workflowExecutionUpdateAcceptedEventAttributes": {
-        "protocolInstanceId": "dcc6e37f-3ef6-47e6-963f-9e03e41e2230",
-        "acceptedRequestMessageId": "dcc6e37f-3ef6-47e6-963f-9e03e41e2230/request",
-        "acceptedRequestSequencingEventId": "2",
+        "protocolInstanceId": "9b3ef31d-171e-49e0-a723-97a7db850f45",
+        "acceptedRequestMessageId": "9b3ef31d-171e-49e0-a723-97a7db850f45/request",
+        "acceptedRequestSequencingEventId": "5",
         "acceptedRequest": {
           "meta": {
-            "updateId": "dcc6e37f-3ef6-47e6-963f-9e03e41e2230",
-            "identity": "1564768@Apollo-11"
+            "updateId": "9b3ef31d-171e-49e0-a723-97a7db850f45",
+            "identity": "1683980@Apollo-11"
           },
           "input": {
             "name": "send",
@@ -104,13 +138,13 @@
       }
     },
     {
-      "eventId": "6",
-      "eventTime": "2026-07-03T04:07:19.786Z",
+      "eventId": "9",
+      "eventTime": "2026-07-03T04:46:14.629Z",
       "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_COMPLETED",
       "workflowExecutionUpdateCompletedEventAttributes": {
         "meta": {
-          "updateId": "dcc6e37f-3ef6-47e6-963f-9e03e41e2230",
-          "identity": "1564768@Apollo-11"
+          "updateId": "9b3ef31d-171e-49e0-a723-97a7db850f45",
+          "identity": "1683980@Apollo-11"
         },
         "outcome": {
           "success": {
@@ -127,8 +161,8 @@
       }
     },
     {
-      "eventId": "7",
-      "eventTime": "2026-07-03T04:07:19.788Z",
+      "eventId": "10",
+      "eventTime": "2026-07-03T04:46:14.630Z",
       "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
       "workflowTaskScheduledEventAttributes": {
         "taskQueue": {
@@ -139,39 +173,39 @@
       }
     },
     {
-      "eventId": "8",
-      "eventTime": "2026-07-03T04:07:19.788Z",
+      "eventId": "11",
+      "eventTime": "2026-07-03T04:46:14.630Z",
       "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
       "workflowTaskStartedEventAttributes": {
-        "scheduledEventId": "7",
-        "identity": "1564768@Apollo-11",
-        "historySizeBytes": "2523"
+        "scheduledEventId": "10",
+        "identity": "1683980@Apollo-11",
+        "historySizeBytes": "2690"
       }
     },
     {
-      "eventId": "9",
-      "eventTime": "2026-07-03T04:07:19.790Z",
+      "eventId": "12",
+      "eventTime": "2026-07-03T04:46:14.632Z",
       "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
       "workflowTaskCompletedEventAttributes": {
-        "scheduledEventId": "7",
-        "identity": "1564768@Apollo-11",
-        "binaryChecksum": "64a63d1bceb1e19ce9da9b279be077c5",
+        "scheduledEventId": "10",
+        "identity": "1683980@Apollo-11",
+        "binaryChecksum": "dc12da091b9812373a0b755759ec8d1d",
         "sdkMetadata": {},
         "meteringMetadata": {}
       }
     },
     {
-      "eventId": "10",
-      "eventTime": "2026-07-03T04:07:19.790Z",
+      "eventId": "13",
+      "eventTime": "2026-07-03T04:46:14.632Z",
       "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED",
       "workflowExecutionUpdateAcceptedEventAttributes": {
-        "protocolInstanceId": "56c07ce4-d5e4-44a7-b2a1-a3f14c8fd369",
-        "acceptedRequestMessageId": "56c07ce4-d5e4-44a7-b2a1-a3f14c8fd369/request",
-        "acceptedRequestSequencingEventId": "7",
+        "protocolInstanceId": "1e7980c7-679e-44b3-9957-508e27d9c494",
+        "acceptedRequestMessageId": "1e7980c7-679e-44b3-9957-508e27d9c494/request",
+        "acceptedRequestSequencingEventId": "10",
         "acceptedRequest": {
           "meta": {
-            "updateId": "56c07ce4-d5e4-44a7-b2a1-a3f14c8fd369",
-            "identity": "1564768@Apollo-11"
+            "updateId": "1e7980c7-679e-44b3-9957-508e27d9c494",
+            "identity": "1683980@Apollo-11"
           },
           "input": {
             "name": "send",
@@ -190,13 +224,13 @@
       }
     },
     {
-      "eventId": "11",
-      "eventTime": "2026-07-03T04:07:19.790Z",
+      "eventId": "14",
+      "eventTime": "2026-07-03T04:46:14.632Z",
       "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_COMPLETED",
       "workflowExecutionUpdateCompletedEventAttributes": {
         "meta": {
-          "updateId": "56c07ce4-d5e4-44a7-b2a1-a3f14c8fd369",
-          "identity": "1564768@Apollo-11"
+          "updateId": "1e7980c7-679e-44b3-9957-508e27d9c494",
+          "identity": "1683980@Apollo-11"
         },
         "outcome": {
           "success": {
@@ -213,8 +247,8 @@
       }
     },
     {
-      "eventId": "12",
-      "eventTime": "2026-07-03T04:07:19.791Z",
+      "eventId": "15",
+      "eventTime": "2026-07-03T04:46:14.633Z",
       "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
       "workflowTaskScheduledEventAttributes": {
         "taskQueue": {
@@ -225,39 +259,39 @@
       }
     },
     {
-      "eventId": "13",
-      "eventTime": "2026-07-03T04:07:19.791Z",
+      "eventId": "16",
+      "eventTime": "2026-07-03T04:46:14.633Z",
       "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
       "workflowTaskStartedEventAttributes": {
-        "scheduledEventId": "12",
-        "identity": "1564768@Apollo-11",
-        "historySizeBytes": "3061"
+        "scheduledEventId": "15",
+        "identity": "1683980@Apollo-11",
+        "historySizeBytes": "3228"
       }
     },
     {
-      "eventId": "14",
-      "eventTime": "2026-07-03T04:07:19.794Z",
+      "eventId": "17",
+      "eventTime": "2026-07-03T04:46:14.635Z",
       "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
       "workflowTaskCompletedEventAttributes": {
-        "scheduledEventId": "12",
-        "identity": "1564768@Apollo-11",
-        "binaryChecksum": "64a63d1bceb1e19ce9da9b279be077c5",
+        "scheduledEventId": "15",
+        "identity": "1683980@Apollo-11",
+        "binaryChecksum": "dc12da091b9812373a0b755759ec8d1d",
         "sdkMetadata": {},
         "meteringMetadata": {}
       }
     },
     {
-      "eventId": "15",
-      "eventTime": "2026-07-03T04:07:19.794Z",
+      "eventId": "18",
+      "eventTime": "2026-07-03T04:46:14.635Z",
       "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED",
       "workflowExecutionUpdateAcceptedEventAttributes": {
-        "protocolInstanceId": "3a61509a-3b84-4c51-9071-69b1271c595d",
-        "acceptedRequestMessageId": "3a61509a-3b84-4c51-9071-69b1271c595d/request",
-        "acceptedRequestSequencingEventId": "12",
+        "protocolInstanceId": "96d570d4-c3b3-48cb-b277-627906b405c8",
+        "acceptedRequestMessageId": "96d570d4-c3b3-48cb-b277-627906b405c8/request",
+        "acceptedRequestSequencingEventId": "15",
         "acceptedRequest": {
           "meta": {
-            "updateId": "3a61509a-3b84-4c51-9071-69b1271c595d",
-            "identity": "1564768@Apollo-11"
+            "updateId": "96d570d4-c3b3-48cb-b277-627906b405c8",
+            "identity": "1683980@Apollo-11"
           },
           "input": {
             "name": "close",
@@ -276,13 +310,13 @@
       }
     },
     {
-      "eventId": "16",
-      "eventTime": "2026-07-03T04:07:19.794Z",
+      "eventId": "19",
+      "eventTime": "2026-07-03T04:46:14.635Z",
       "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_COMPLETED",
       "workflowExecutionUpdateCompletedEventAttributes": {
         "meta": {
-          "updateId": "3a61509a-3b84-4c51-9071-69b1271c595d",
-          "identity": "1564768@Apollo-11"
+          "updateId": "96d570d4-c3b3-48cb-b277-627906b405c8",
+          "identity": "1683980@Apollo-11"
         },
         "outcome": {
           "success": {
@@ -299,8 +333,8 @@
       }
     },
     {
-      "eventId": "17",
-      "eventTime": "2026-07-03T04:07:19.794Z",
+      "eventId": "20",
+      "eventTime": "2026-07-03T04:46:14.635Z",
       "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED",
       "workflowExecutionCompletedEventAttributes": {
         "result": {
@@ -313,7 +347,7 @@
             }
           ]
         },
-        "workflowTaskCompletedEventId": "13"
+        "workflowTaskCompletedEventId": "16"
       }
     }
   ]

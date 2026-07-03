@@ -67,8 +67,9 @@ from composable_agents.session import scan
 
 HISTORIES_DIR = pathlib.Path(__file__).parent / "histories"
 CORPUS: list[str] = [
-    "flow_par_sub",
+    "flow_par_each_sub",
     "session_multi_turn",
+    "session_store",
     "agent_loop",
     "debounce",
     "batch_collector",
@@ -219,15 +220,21 @@ def make_replayer() -> Replayer:
     return Replayer(workflows=WORKFLOWS, workflow_runner=_shared_runner())
 
 
-async def _record_flow_par_sub(client: Any) -> WorkflowHistory:
-    child = freeze(call(mcp("srv", "inc")), _snapshot("inc"))
+async def _record_flow_par_each_sub(client: Any) -> WorkflowHistory:
+    # Covers all three FlowWorkflow fan-out operators in one history: par
+    # (static fan-out), each (dynamic per-element fan-out), and sub (child
+    # workflow). Input is a list so `each` has elements to iterate.
+    child = freeze(call(mcp("srv", "echo")), _snapshot("echo"))
     subflows = {
         "child": {
             "flowJson": child.flow.to_json(),
             "manifestJson": manifest_to_json(child.manifest),
         }
     }
-    fr = freeze(par(call(mcp("srv", "double")), sub("child")), _snapshot("double"))
+    fr = freeze(
+        par(each(call(mcp("srv", "inc"))), sub("child")),
+        _snapshot("inc"),
+    )
     ctx = WorkerContext(mcp_call=_mcp, llm=None, subflows=subflows)
     async with build_worker(client, ctx, task_queue="corpus-flow"):
         handle = await start_flow(
@@ -235,7 +242,7 @@ async def _record_flow_par_sub(client: Any) -> WorkflowHistory:
             fr.flow.to_json(),
             manifest_to_json(fr.manifest),
             session_id="corpus-flow",
-            input=5,
+            input=[1, 2],
             task_queue="corpus-flow",
         )
         await handle.result()
@@ -272,10 +279,49 @@ async def _record_session_multi_turn(client: Any) -> WorkflowHistory:
     return hist
 
 
+async def _record_session_store(client: Any) -> WorkflowHistory:
+    # Store-backed carrier: state_cursor set (no carrier) forces _load_carrier to
+    # schedule the loadValue activity at start; history_threshold=1 forces a
+    # continue-as-new after the first turn, which schedules the commitValue
+    # activity. We record the FIRST run so both loadValue and commitValue plus the
+    # CONTINUED_AS_NEW boundary land in the corpus.
+    turn = seq(recv_leaf("in"), arr("test.corpus_session_step"))
+    session = scan(turn, init=0, in_channel="in", out_channel="out")
+    fr = freeze(session.body, McpSnapshot())
+    store = InMemorySessionStore(empty_value=0)
+    ctx = WorkerContext(session_store=store, mcp_call=None)
+    async with build_worker(client, ctx, task_queue="corpus-session-store"):
+        handle = await client.start_workflow(
+            SessionWorkflow.run,
+            SessionInput(
+                session_id="corpus-session-store",
+                flow_json=fr.flow.to_json(),
+                manifest_json=manifest_to_json(fr.manifest),
+                init=0,
+                in_channel="in",
+                out_channel="out",
+                policy=ExecutionPolicy().to_json(),
+                state_cursor=0,
+                history_threshold=1,
+            ),
+            id="corpus-session-store",
+            task_queue="corpus-session-store",
+        )
+        await handle.execute_update("send", {"channel": "in", "value": "a"})
+        await handle.execute_update("close", {})
+        await handle.result()
+        first_run_id = handle.first_execution_run_id
+        assert first_run_id, "session-store handle has no first_execution_run_id"
+        hist = await client.get_workflow_handle(
+            handle.id, run_id=first_run_id
+        ).fetch_history()
+    return hist
+
+
 async def _record_agent_loop(client: Any) -> WorkflowHistory:
     agents = {
         "corpus_ctrl": {
-            "config": {"maxRounds": 6, "budget": {"cost": 1000}},
+            "config": {"maxRounds": 6, "budget": {"cost": 1000}, "continueAsNewAfter": 2},
             "grantedTools": ["srv/double"],
             "grantedSubflows": ["child"],
         }
@@ -312,7 +358,11 @@ async def _record_agent_loop(client: Any) -> WorkflowHistory:
             task_queue="corpus-agent",
         )
         await handle.result()
-        hist = await handle.fetch_history()
+        first_run_id = handle.first_execution_run_id
+        assert first_run_id, "agent handle has no first_execution_run_id"
+        hist = await client.get_workflow_handle(
+            handle.id, run_id=first_run_id
+        ).fetch_history()
     return hist
 
 
@@ -327,7 +377,6 @@ async def _record_debounce(client: Any) -> WorkflowHistory:
             key="corpus-debounce",
             item=1,
             quiet_s=1,
-            max_items=1,
             task_queue="corpus-debounce",
         )
         await handle.result()
@@ -405,8 +454,9 @@ async def record_all() -> None:
     async with await WorkflowEnvironment.start_time_skipping() as env:
         scenarios: dict[str, WorkflowHistory] = {}
         for name, record in (
-            ("flow_par_sub", _record_flow_par_sub),
+            ("flow_par_each_sub", _record_flow_par_each_sub),
             ("session_multi_turn", _record_session_multi_turn),
+            ("session_store", _record_session_store),
             ("agent_loop", _record_agent_loop),
             ("debounce", _record_debounce),
         ):

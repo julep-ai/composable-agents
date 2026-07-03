@@ -39,7 +39,7 @@ def test_corpus_replays_clean(name: str) -> None:
 @pytest.mark.skipif(not HAVE_TEMPORAL, reason="temporalio not installed")
 def test_scheduling_mutation_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
     setup_registries()
-    history = _load("flow_par_sub")
+    history = _load("flow_par_each_sub")
     original = harness.gather_bounded
 
     async def _reversed(coros, *, max_parallel):  # type: ignore[no-untyped-def]

@@ -79,13 +79,6 @@ def _env_float(env: Mapping[str, str], name: str, default: float) -> float:
         raise ValueError(f"{name} must be a number, got {raw!r}") from exc
 
 
-def _package_version() -> str:
-    try:
-        return version("composable-agents")
-    except PackageNotFoundError:
-        return "0.0.0+unknown"
-
-
 @dataclass(frozen=True)
 class WorkerServeSettings:
     """Environment-shaped configuration for one worker replica.
@@ -154,13 +147,26 @@ def _versioning_worker_kwargs(settings: WorkerServeSettings) -> dict[str, Any]:
     contract we ship is the CA_WORKER_* env seam (parsed into WorkerServeSettings);
     the Worker kwarg can migrate to deployment_config later without touching that seam.
     Omit-when-unset: versioning off + no build_id -> {} so build_worker is called
-    byte-identically to before this task. When versioning is on, build_id is required
-    by Worker, so it defaults to the package version.
+    byte-identically to before this task. When versioning is on and no explicit
+    build_id was given, we default it to the installed package version; if that
+    version cannot be resolved (source checkout / metadata-less image) we FAIL LOUDLY
+    rather than advertise a constant fake Build ID across incompatible worker images
+    (that silent fallback would defeat the versioning safety this feature provides — G-8).
     """
     kwargs: dict[str, Any] = {}
     build_id = settings.build_id
     if settings.use_worker_versioning and build_id is None:
-        build_id = _package_version()
+        try:
+            build_id = version("composable-agents")
+        except PackageNotFoundError as exc:
+            raise ComposableAgentsError(
+                "worker versioning is on (CA_WORKER_VERSIONING=1) but no "
+                "CA_WORKER_BUILD_ID is set and the composable-agents version cannot "
+                "be read from installed package metadata (source checkout or an image "
+                "without distribution metadata). Set CA_WORKER_BUILD_ID to a stable, "
+                "per-image Build ID: versioning must never advertise a constant fake "
+                "Build ID across mutually-incompatible worker images."
+            ) from exc
     if build_id is not None:
         kwargs["build_id"] = build_id
     if settings.use_worker_versioning:

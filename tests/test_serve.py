@@ -120,6 +120,38 @@ def test_versioning_kwargs_defaults_build_id_to_package_version():
     }
 
 
+def test_versioning_kwargs_missing_metadata_raises(monkeypatch):
+    from importlib import import_module
+
+    serve_mod = import_module("composable_agents.execution.serve")
+
+    def _boom(_name):
+        raise serve_mod.PackageNotFoundError(_name)
+
+    monkeypatch.setattr(serve_mod, "version", _boom)
+    settings = WorkerServeSettings(context_factory="m:f", use_worker_versioning=True)
+    with pytest.raises(ComposableAgentsError, match="CA_WORKER_BUILD_ID"):
+        _versioning_worker_kwargs(settings)
+
+
+def test_versioning_kwargs_explicit_build_id_survives_missing_metadata(monkeypatch):
+    from importlib import import_module
+
+    serve_mod = import_module("composable_agents.execution.serve")
+
+    def _boom(_name):
+        raise serve_mod.PackageNotFoundError(_name)
+
+    monkeypatch.setattr(serve_mod, "version", _boom)
+    settings = WorkerServeSettings(
+        context_factory="m:f", build_id="v9", use_worker_versioning=True
+    )
+    assert _versioning_worker_kwargs(settings) == {
+        "build_id": "v9",
+        "use_worker_versioning": True,
+    }
+
+
 def test_versioning_kwargs_explicit_build_id():
     settings = WorkerServeSettings(
         context_factory="m:f",
@@ -250,6 +282,59 @@ def test_build_worker_forwards_versioning_kwargs(monkeypatch):
         )
 
     assert captured["kwargs"]["build_id"] == "test-bid"
+    assert captured["kwargs"]["use_worker_versioning"] is True
+
+
+@pytest.mark.skipif(not HAVE_TEMPORAL, reason="temporalio not installed")
+def test_serve_forwards_versioning_kwargs_to_build_worker(monkeypatch):
+    import composable_agents.execution.worker as worker_mod
+    from temporalio.client import Client
+
+    captured: dict[str, Any] = {}
+
+    class FakeWorker:
+        def __init__(self) -> None:
+            self._stop = asyncio.Event()
+
+        async def run(self) -> None:
+            await self._stop.wait()
+
+        async def shutdown(self) -> None:
+            self._stop.set()
+
+    def fake_build_worker(client, context, *, task_queue, **kwargs):
+        captured["task_queue"] = task_queue
+        captured["kwargs"] = kwargs
+        return FakeWorker()
+
+    async def fake_connect(target, **kwargs):
+        return object()
+
+    monkeypatch.setattr(worker_mod, "build_worker", fake_build_worker)
+    monkeypatch.setattr(Client, "connect", staticmethod(fake_connect))
+
+    settings = WorkerServeSettings(
+        context_factory=f"{__name__}:make_context",
+        build_id="serve-bid",
+        use_worker_versioning=True,
+    )
+
+    async def _drive() -> None:
+        stop = asyncio.Event()
+        task = asyncio.create_task(serve(settings, shutdown_event=stop))
+        try:
+            for _ in range(1000):
+                if "kwargs" in captured:
+                    break
+                await asyncio.sleep(0.005)
+            assert "kwargs" in captured, "serve() never called build_worker"
+        finally:
+            stop.set()
+            await asyncio.wait_for(task, timeout=10)
+
+    run(_drive())
+
+    assert captured["kwargs"]["build_id"] == "serve-bid"
     assert captured["kwargs"]["use_worker_versioning"] is True
 
 
