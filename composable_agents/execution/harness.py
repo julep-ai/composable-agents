@@ -2555,6 +2555,38 @@ class AgentWorkflow:
 # --------------------------------------------------------------------------- #
 # Client helper.
 # --------------------------------------------------------------------------- #
+def build_flow_input(
+    *,
+    session_id: str,
+    input: Any = None,
+    flow_json: Optional[dict[str, Any]] = None,
+    manifest_json: Optional[dict[str, Any]] = None,
+    policy: Optional[ExecutionPolicy] = None,
+    pinned_pures: Optional[dict[str, str]] = None,
+    max_call_limits: Optional[dict[str, int]] = None,
+    principal: Optional[dict[str, Any]] = None,
+    root_run_id: Optional[str] = None,
+    bundle: Optional[list[dict[str, str]]] = None,
+) -> FlowInput:
+    """Single source of truth for deployed-run FlowInput construction.
+
+    Used by run_flow AND by ca-layer ``build_flow_start_args`` consumers
+    (ca run / ca schedule) so scheduled and manual runs carry byte-identical args.
+    """
+    return FlowInput(
+        session_id=session_id,
+        input=input,
+        flow_json=flow_json,
+        manifest_json=manifest_json,
+        pinned_pures=pinned_pures,
+        max_call_limits=max_call_limits,
+        policy=(policy or ExecutionPolicy()).to_json(),
+        principal=principal,
+        root_run_id=root_run_id,
+        bundle=bundle,
+    )
+
+
 async def run_flow(
     client,
     flow_json: dict[str, Any],
@@ -2581,14 +2613,14 @@ async def run_flow(
     """
     return await client.execute_workflow(
         FlowWorkflow.run,
-        FlowInput(
+        build_flow_input(
             session_id=session_id,
             input=input,
             flow_json=flow_json,
             manifest_json=manifest_json,
             pinned_pures=pinned_pures,
             max_call_limits=max_call_limits,
-            policy=(policy or ExecutionPolicy()).to_json(),
+            policy=policy,
             principal=principal,
             root_run_id=root_run_id,
             bundle=bundle,
@@ -2868,6 +2900,7 @@ __all__ = [
     "startTrajectory",
     "flushStructural",
     "runSubCapture",
+    "build_flow_input",
     "run_flow",
     "start_flow",
     "TemporalSessionHandle",

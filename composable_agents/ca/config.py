@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,8 @@ if sys.version_info >= (3, 11):
     import tomllib as _tomllib
 else:
     _tomllib = None
+
+_CRON_TOKEN_RE = re.compile(r"^[0-9*/,\-A-Za-z?]+$")
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,16 @@ class EnvConfig:
 
 
 @dataclass(frozen=True)
+class ScheduleConfig:
+    name: str
+    cron: str
+    flow: str
+    input: Any = None
+    env: str = "local"
+    paused: bool = False
+
+
+@dataclass(frozen=True)
 class CaConfig:
     root: Path
     src: list[str] = field(default_factory=list)
@@ -32,6 +45,19 @@ class CaConfig:
     tags: dict[str, list[str]] = field(default_factory=dict)
     fail_severity: str = 'error'
     envs: dict[str, EnvConfig] = field(default_factory=dict)
+    schedules: dict[str, ScheduleConfig] = field(default_factory=dict)
+
+
+def validate_cron(cron: str) -> None:
+    fields = cron.split()
+    if len(fields) not in (5, 6):
+        raise ValueError(
+            f"cron {cron!r} must have 5 or 6 whitespace-separated fields "
+            f"(minute hour day-of-month month day-of-week [year]); got {len(fields)}"
+        )
+    for token in fields:
+        if not _CRON_TOKEN_RE.match(token):
+            raise ValueError(f"cron field {token!r} in {cron!r} is not a valid cron token")
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
@@ -106,6 +132,41 @@ def _build_envs(
     }
 
 
+def _build_schedules(
+    pyproject_sched: object,
+    ca_toml_sched: object,
+) -> dict[str, ScheduleConfig]:
+    tables: dict[str, dict[str, Any]] = {}
+    for raw_schedules in (pyproject_sched, ca_toml_sched):
+        if not isinstance(raw_schedules, dict):
+            continue
+        for name, table in raw_schedules.items():
+            sched_name = str(name)
+            if isinstance(table, dict):
+                tables.setdefault(sched_name, {}).update(table)
+            else:
+                tables.setdefault(sched_name, {})
+
+    schedules: dict[str, ScheduleConfig] = {}
+    for name, table in tables.items():
+        cron = table.get("cron")
+        if not isinstance(cron, str) or not cron:
+            raise ValueError(f"schedule {name!r} requires a 'cron' string")
+        flow = table.get("flow")
+        if not isinstance(flow, str) or not flow:
+            raise ValueError(f"schedule {name!r} requires a 'flow' string")
+        validate_cron(cron)
+        schedules[name] = ScheduleConfig(
+            name=name,
+            cron=cron,
+            flow=flow,
+            input=table.get("input"),
+            env=str(table.get("env", "local")),
+            paused=bool(table.get("paused", False)),
+        )
+    return schedules
+
+
 def load_config(root: str | Path) -> CaConfig:
     """Read [tool.ca] from pyproject.toml, then overlay a sibling ca.toml if present."""
     root = Path(root)
@@ -120,4 +181,5 @@ def load_config(root: str | Path) -> CaConfig:
         tags={k: list(v) for k, v in merged.get('tags', {}).items()},
         fail_severity=str(gates.get('fail_severity', 'error')),
         envs=_build_envs(root, pyproject.get('env', {}), ca_toml.get('env', {})),
+        schedules=_build_schedules(pyproject.get("schedule", {}), ca_toml.get("schedule", {})),
     )
