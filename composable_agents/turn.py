@@ -39,7 +39,12 @@ from .agent_loop import (
     would_exceed_budget,
 )
 from .kinds import Effect, EnforcementMode
-from .transcript import TRANSCRIPT_SCOPES, split_summary_reply, transcript_for
+from .transcript import (
+    TRANSCRIPT_SCOPES,
+    split_summary_reply,
+    transcript_for,
+    unwrap_reply_meta,
+)
 
 logger = logging.getLogger("composable_agents.turn")
 
@@ -187,6 +192,7 @@ def controller_turn(
                 payload["summary"] = state.summary
         reply = await invoke_controller(payload)
         new_summary, reply = split_summary_reply(reply)
+        reply = unwrap_reply_meta(reply)
         if new_summary is not None:
             state.summary = new_summary
         state.charge(cfg.think_cost)

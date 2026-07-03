@@ -69,12 +69,6 @@ if not getattr(WorkflowUpdateFailedError, "_ca_repr_includes_cause", False):
     WorkflowUpdateFailedError._ca_repr_includes_cause = True  # type: ignore[attr-defined]
 
 
-def _unwrap_reply(value: Any) -> Any:
-    if isinstance(value, dict) and "__ca_meta__" in value and "reply" in value:
-        return value["reply"]
-    return value
-
-
 def _batch_error_reason(result: Any) -> Optional[str]:
     if not isinstance(result, dict) or not result.get("__batch_error__"):
         return None
@@ -105,7 +99,12 @@ with workflow.unsafe.imports_passed_through():
     from ..purity import get_pure as _get_pure_from_registry
     from ..qos import QoSTier
     from ..registry import DEFAULT_REGISTRY as _DEFAULT_REGISTRY
-    from ..transcript import TRANSCRIPT_SCOPES, split_summary_reply, transcript_for
+    from ..transcript import (
+        TRANSCRIPT_SCOPES,
+        split_summary_reply,
+        transcript_for,
+        unwrap_reply_meta,
+    )
     from .llm import _split_model
     from .policy import ExecutionPolicy
     from .effects import toolref_json_from_key as _toolref_json_from_key
@@ -663,7 +662,7 @@ class _TemporalEnv:
                         "promoted": True,
                         "reason": "batch_timeout",
                     },
-                    "reply": _unwrap_reply(reply),
+                    "reply": unwrap_reply_meta(reply),
                 }
             err_reason = _batch_error_reason(result)
             if err_reason is not None:
@@ -676,7 +675,7 @@ class _TemporalEnv:
                         "promoted": True,
                         "reason": err_reason,
                     },
-                    "reply": _unwrap_reply(reply),
+                    "reply": unwrap_reply_meta(reply),
                 }
             return result
 
@@ -2105,6 +2104,7 @@ class AgentWorkflow:
                 retry_policy=_reasoner_retry(policy),
             )
             new_summary, reply = split_summary_reply(reply)
+            reply = unwrap_reply_meta(reply)
             if new_summary is not None:
                 state.summary = new_summary
             state.charge(cfg.think_cost)

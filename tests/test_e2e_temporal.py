@@ -53,6 +53,7 @@ if HAVE_TEMPORAL:
     )
     from composable_agents.execution.session_store import InMemorySessionStore
     from composable_agents.execution.blobstore import InMemoryBlobStore
+    from composable_agents.execution.llm_result import LlmCallMeta, LlmResult
     from temporalio.worker import Worker
     from composable_agents import purity
     from composable_agents.purity import PureEntry
@@ -1160,6 +1161,88 @@ async def _agent_native_tools_call_many(env):
     assert seen_values[1]["input"] == res["output"]
 
 
+async def _agent_native_tools_llm_result_meta_unwrap(env):
+    tool_defs = [
+        {
+            "type": "function",
+            "function": {
+                "name": "srv/double",
+                "description": "",
+                "parameters": {"type": "number"},
+            },
+        },
+    ]
+    agents = {
+        "native_llm_result_ctrl": {
+            "config": {
+                "nativeTools": True,
+                "maxRounds": 4,
+                "budget": {"cost": 1000},
+            },
+            "grantedTools": ["srv/double"],
+            "grantedContracts": {
+                "srv/double": {"effect": "read", "idempotency": "native"},
+            },
+            "toolDefs": tool_defs,
+        }
+    }
+    seen_values = []
+    effects = []
+
+    def meta() -> LlmCallMeta:
+        return LlmCallMeta(served_model="gpt-test", provider="openai")
+
+    async def native_llm(reasoner, value, principal, transcript, dispatch, *, tools=None):  # noqa: ANN001
+        del principal, transcript, dispatch
+        assert reasoner.name == "native_llm_result_ctrl"
+        assert tools == tool_defs
+        seen_values.append(value)
+        if len(seen_values) == 1:
+            return LlmResult(
+                reply={
+                    "tool_calls": [
+                        {"id": "a", "tool": "srv/double", "input": 2},
+                    ],
+                },
+                meta=meta(),
+            )
+        assert value["input"] == [{"id": "a", "tool": "srv/double", "output": 4}]
+        return LlmResult(reply={"done": True, "output": "done"}, meta=meta())
+
+    async def counted_mcp(server, tool, value, idempotency_key):  # noqa: ANN001
+        effects.append((server, tool, value, idempotency_key))
+        return await _mcp(server, tool, value, idempotency_key)
+
+    async with _worker(
+        env,
+        task_queue="ca-agent-native-tools-llm-result",
+        agents=agents,
+        llm=native_llm,
+        mcp_call=counted_mcp,
+        extra_reasoners=(Reasoner(name="native_llm_result_ctrl", model="test", system="native"),),
+    ):
+        sid = f"native-tools-llm-result-{uuid.uuid4()}"
+        res = await env.client.execute_workflow(
+            AgentWorkflow.run,
+            AgentInput(
+                controller="native_llm_result_ctrl",
+                session_id=sid,
+                input={"task": "go"},
+                policy=ExecutionPolicy().to_json(),
+            ),
+            id=sid,
+            task_queue="ca-agent-native-tools-llm-result",
+        )
+
+    assert res["status"] == "done", res
+    assert res["rounds"] == 1, res
+    assert res["output"] == "done"
+    assert [(t["decision"], t["ref"], t["callId"]) for t in res["trace"]] == [
+        ("call", "srv/double", "a"),
+    ]
+    assert effects == [("srv", "double", 2, f"{sid}-call-0-0")]
+
+
 async def _agent_call_many_tool_error_folds_to_observation(env):
     tool_defs = [
         {
@@ -1318,6 +1401,7 @@ async def _run_all():
         await _agent_tool_error_persisted_for_transcript(env)
         await _pure_drift_fails_before_effect(env)
         await _agent_native_tools_call_many(env)
+        await _agent_native_tools_llm_result_meta_unwrap(env)
         await _agent_call_many_tool_error_folds_to_observation(env)
         await _agent_native_tools_without_tool_defs_fails(env)
 

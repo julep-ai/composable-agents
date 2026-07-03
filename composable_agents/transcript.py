@@ -51,6 +51,7 @@ TRANSCRIPT_SCOPES = (ContextScope.WHOLE_SESSION, ContextScope.SUMMARY)
 # Envelope key invokeReasoner uses to tool a freshly produced running summary back
 # to the workflow (see split_summary_reply). Reserved; never a controller key.
 SUMMARY_KEY = "__ca_summary__"
+_CA_META_KEY = "__ca_meta__"
 
 
 class TraceEntryView(Protocol):
@@ -199,6 +200,13 @@ def split_summary_reply(reply: Any) -> tuple[Optional[str], Any]:
     return None, reply
 
 
+def unwrap_reply_meta(reply: Any) -> Any:
+    """Unwrap the ``invokeReasoner`` LLM metadata envelope, if present."""
+    if isinstance(reply, dict) and _CA_META_KEY in reply and "reply" in reply:
+        return reply["reply"]
+    return reply
+
+
 __all__ = [
     "Turn",
     "Transcript",
@@ -216,4 +224,5 @@ __all__ = [
     "summary_turn",
     "bounded_transcript",
     "split_summary_reply",
+    "unwrap_reply_meta",
 ]
