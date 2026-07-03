@@ -291,10 +291,16 @@ def _messages(
 
 def _prompt_cache_control(prompt_cache: str) -> dict[str, Any]:
     # "5m" => Anthropic's default ephemeral (no ttl key); "1h" => explicit ttl.
-    return (
-        {"type": "ephemeral"}
-        if prompt_cache == "5m"
-        else {"type": "ephemeral", "ttl": "1h"}
+    # Any other value is a loud teaching error (G-8): never silently coerced to
+    # the most-expensive 1h write. The object-first Reasoner constructor already
+    # validates, this is the defense-in-depth at the wire seam.
+    if prompt_cache == "5m":
+        return {"type": "ephemeral"}
+    if prompt_cache == "1h":
+        return {"type": "ephemeral", "ttl": "1h"}
+    raise ValueError(
+        f"unsupported prompt_cache {prompt_cache!r}; "
+        "supported values are '5m' or '1h'"
     )
 
 
@@ -326,9 +332,11 @@ def _apply_prompt_cache(
     block otherwise (spike finding). A trailing *volatile* system message
     (e.g. a per-round note appended after the user turn) is emitted as an
     un-cached block AFTER the cache_control breakpoint so per-round changes
-    never invalidate the cached prefix. Non-anthropic providers and an unset
-    ``prompt_cache`` return the inputs unchanged (recording happens on the meta,
-    not here)."""
+    never invalidate the cached prefix; a cache breakpoint is placed on the
+    system block only when a stable (pre-final-turn) prefix exists, so a sole
+    trailing note carries NO cache_control. Non-anthropic providers and an
+    unset ``prompt_cache`` return the inputs unchanged (recording happens on the
+    meta, not here)."""
     if prompt_cache is None or provider != "anthropic":
         return messages, kwargs
     cc = _prompt_cache_control(prompt_cache)
@@ -344,8 +352,6 @@ def _apply_prompt_cache(
         if stable:
             blocks.append({"type": "text", "text": "\n".join(stable), "cache_control": cc})
         blocks.extend({"type": "text", "text": t} for t in volatile)
-        if blocks and not stable:
-            blocks[0]["cache_control"] = cc  # ensure a breakpoint exists
         first = sys_idxs[0]
         out[first] = {"role": "system", "content": blocks}
         drop = set(sys_idxs[1:])
@@ -362,6 +368,17 @@ def _apply_prompt_cache(
                 }
                 break
     return out, kwargs
+
+
+def _has_cache_marker(messages: list[dict[str, Any]]) -> bool:
+    """True when any message carries a content block with ``cache_control``."""
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, list):
+            for b in content:
+                if isinstance(b, dict) and "cache_control" in b:
+                    return True
+    return False
 
 
 def _parse_reply(completion: Any, *, expect_json: bool) -> Any:
@@ -514,7 +531,10 @@ async def complete_reasoner(
                         tool_call["tool"] = tool_name_reverse.get(tool, tool)
         return parsed
 
+    pc_marker_placed = False
+
     async def call(*, native: bool, retry_note: Optional[str] = None) -> Any:
+        nonlocal pc_marker_placed
         # Native tool rounds cannot carry response_format; keep schema guidance
         # in the prompt so FINISH replies can still parse on non-tool rounds.
         native_response_format = native and not has_tools
@@ -560,6 +580,7 @@ async def complete_reasoner(
         messages, kwargs = _apply_prompt_cache(
             provider, reasoner.prompt_cache, messages, kwargs
         )
+        pc_marker_placed = _has_cache_marker(messages)
         return await acompletion(provider=provider, model=model, messages=messages, **kwargs)
 
     started = time.time()
@@ -625,11 +646,19 @@ async def complete_reasoner(
         reply = _restore_tool_calls(reply)
     ended = time.time()
     pc = reasoner.prompt_cache
+    pc_requested: Optional[str]
+    pc_applied: Optional[bool]
+    pc_reason: Optional[str]
     if pc is None:
         pc_requested = pc_reason = None
-        pc_applied: Optional[bool] = None
+        pc_applied = None
     elif provider == "anthropic":
-        pc_requested, pc_applied, pc_reason = pc, True, None
+        # applied reflects ACTUAL marker placement, not merely the provider:
+        # an anthropic call with no cacheable prefix (empty system, single turn)
+        # places no marker and must not claim caching (G-8 honesty).
+        pc_requested = pc
+        pc_applied = pc_marker_placed
+        pc_reason = None if pc_marker_placed else "no_cacheable_content"
     else:
         pc_requested, pc_applied, pc_reason = pc, False, "provider_inert"
     meta = LlmCallMeta(

@@ -34,7 +34,9 @@ from composable_agents.deploy import _reasoner_identity
 from composable_agents.dotctx import Reasoner, reasoner_from_settings
 from composable_agents.execution.llm import (
     _apply_prompt_cache,
+    _has_cache_marker,
     _messages,
+    _prompt_cache_control,
     complete_reasoner,
     make_resilient_llm_caller,
 )
@@ -201,6 +203,25 @@ def test_anthropic_meta_applied() -> None:
     assert result.meta.prompt_cache_reason is None
 
 
+def test_anthropic_no_cacheable_content_applied_false() -> None:
+    # No stable system prefix and a single turn => no marker placed => applied
+    # must be False with an honest reason, not a bare provider==anthropic True.
+    rec = Recorder([_completion()])
+    reasoner = Reasoner(
+        name="pcnocacheable",
+        model="anthropic:claude-x",
+        system="",
+        prompt_cache="1h",
+    )
+
+    result = run(complete_reasoner(reasoner, "hi", acompletion=rec))
+
+    assert not _has_cache_marker(rec.calls[0]["messages"])
+    assert result.meta.prompt_cache_requested == "1h"
+    assert result.meta.prompt_cache_applied is False
+    assert result.meta.prompt_cache_reason == "no_cacheable_content"
+
+
 def test_fallback_crossing_provider_records_reason() -> None:
     script = Recorder([TimeoutError("slow"), _completion("fine")])
 
@@ -318,6 +339,22 @@ def test_settings_loader_accepts_and_validates() -> None:
         )
 
 
+def test_constructor_rejects_unsupported_ttl() -> None:
+    # G-8: the object-first path validates too, not just the settings loaders.
+    with pytest.raises(ValueError, match="5m.*1h|1h.*5m"):
+        Reasoner(name="pcctorbad", model="anthropic:claude-x", prompt_cache="2h")
+    with pytest.raises(ValueError, match="5m.*1h|1h.*5m"):
+        Reasoner(name="pcctorbad2", model="anthropic:claude-x", prompt_cache="30m")
+
+
+def test_prompt_cache_control_rejects_unsupported() -> None:
+    # Defense-in-depth at the wire seam: never coerce to the 1h write.
+    assert _prompt_cache_control("5m") == {"type": "ephemeral"}
+    assert _prompt_cache_control("1h") == {"type": "ephemeral", "ttl": "1h"}
+    with pytest.raises(ValueError, match="5m.*1h|1h.*5m"):
+        _prompt_cache_control("2h")
+
+
 def test_deploy_identity_omits_when_unset() -> None:
     DEFAULT_REGISTRY.register_reasoner(
         Reasoner(name="pcidentunset", model="anthropic:claude-x", system="stable system")
@@ -333,6 +370,23 @@ def test_deploy_identity_omits_when_unset() -> None:
 
     assert "promptCache" not in _reasoner_identity("pcidentunset")
     assert _reasoner_identity("pcidentset")["promptCache"] == "1h"
+
+
+def test_volatile_round_note_no_stable_prefix_gets_no_marker() -> None:
+    # Empty base system + a trailing per-round note is the ONLY system content:
+    # nothing stable to cache, so no cache_control breakpoint is forced onto the
+    # volatile block (which would write a fresh ephemeral entry every round).
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": "[REMAINING ROUNDS: 5]"},
+    ]
+
+    out, _ = _apply_prompt_cache("anthropic", "1h", messages, {})
+
+    assert not _has_cache_marker(out)
+    system = _one_system(out)
+    if isinstance(system["content"], list):
+        assert all("cache_control" not in b for b in system["content"])
 
 
 def test_phase3_transcript_toolcall_collision_regression() -> None:
@@ -382,9 +436,17 @@ def test_phase3_transcript_toolcall_collision_regression() -> None:
     reason="ANTHROPIC_API_KEY is required for the live Anthropic cache spike",
 )
 def test_live_anthropic_cache_create_then_read() -> None:
+    import uuid
+
     from any_llm import acompletion
 
-    stable_text = " ".join(f"cache-token-{i}" for i in range(2500))
+    # Unique per-run prefix so call 1 is deterministically a cache CREATE (no
+    # pre-existing 1h-TTL entry from an earlier run). On the acompletion path
+    # cache CREATION is folded into prompt_tokens (no separate field — see the
+    # module docstring), so call 1 is proven a create by the ABSENCE of a read
+    # hit on a never-before-seen prefix; call 2 is proven a read by cached_tokens>0.
+    nonce = uuid.uuid4().hex
+    stable_text = nonce + " " + " ".join(f"cache-token-{i}" for i in range(2500))
     messages = [
         {
             "role": "system",
@@ -399,21 +461,28 @@ def test_live_anthropic_cache_create_then_read() -> None:
         {"role": "user", "content": "Reply with exactly: ok"},
     ]
 
-    async def call_twice() -> Any:
-        await acompletion(
+    async def call_twice() -> tuple[Any, Any]:
+        first = await acompletion(
             provider="anthropic",
             model="claude-haiku-4-5-20251001",
             messages=messages,
             max_tokens=8,
         )
-        return await acompletion(
+        second = await acompletion(
             provider="anthropic",
             model="claude-haiku-4-5-20251001",
             messages=messages,
             max_tokens=8,
         )
+        return first, second
 
-    completion = run(call_twice())
-    details = completion.usage.prompt_tokens_details
-    assert isinstance(details.cached_tokens, int)
-    assert details.cached_tokens > 0
+    first, second = run(call_twice())
+
+    first_details = first.usage.prompt_tokens_details
+    first_cached = getattr(first_details, "cached_tokens", None) if first_details else None
+    assert first_cached in (None, 0)  # cache CREATE: no read hit on a fresh prefix
+
+    second_details = second.usage.prompt_tokens_details
+    assert second_details is not None
+    assert isinstance(second_details.cached_tokens, int)
+    assert second_details.cached_tokens > 0  # cache READ hit

@@ -212,6 +212,11 @@ class Reasoner:
         object.__setattr__(self, "output_retries", output_retries)
         object.__setattr__(self, "require_tool_call", require_tool_call)
         object.__setattr__(self, "response_format", response_format)
+        if prompt_cache is not None and prompt_cache not in _PROMPT_CACHE_TTLS:
+            raise ValueError(
+                f"unsupported prompt_cache {prompt_cache!r}; "
+                "supported values are '5m' or '1h'"
+            )
         object.__setattr__(self, "prompt_cache", prompt_cache)
 
 
