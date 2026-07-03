@@ -185,6 +185,8 @@ def _reasoner_identity(name: str) -> dict[str, Any]:
         ident["requireToolCall"] = True
     if reasoner.response_format is not None:
         ident["responseFormat"] = reasoner.response_format
+    if reasoner.prompt_cache is not None:
+        ident["promptCache"] = reasoner.prompt_cache
     return ident
 
 
