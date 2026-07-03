@@ -12,7 +12,14 @@ pytest.importorskip("jinja2")
 pytest.importorskip("yglu")  # the vendored .ctx settings carry `!?` env expressions
 
 from composable_agents.ca import cli
-from composable_agents.ca.evalrun import EvalReport, _run_tool_loop, diff_reports, run_eval, run_eval_sync
+from composable_agents.ca.evalrun import (
+    EvalReport,
+    _provider_tool_defs,
+    _run_tool_loop,
+    diff_reports,
+    run_eval,
+    run_eval_sync,
+)
 from composable_agents.dotctx import load_dotctx
 from composable_agents.dotctx_evals import (
     MockToolConfig,
@@ -75,6 +82,22 @@ def _tool_call_completion(id: str, name: str, args_json: str) -> FakeCompletion:
 
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "memmcp"
+
+
+def _write_eval_ctx(tmp_path: Path, eval_py: str) -> Path:
+    ctx = tmp_path / "case.ctx"
+    ctx.mkdir()
+    (ctx / "settings.yaml").write_text('model: "openai/gpt-eval@low"\n', encoding="utf-8")
+    (ctx / "prompt.j2").write_text(
+        "<<< role:system >>>\nHi.\n\n<<< role:user >>>\nT: {{ task | default('', true) }}\n",
+        encoding="utf-8",
+    )
+    (ctx / "eval.yaml").write_text(
+        "threshold: 0.5\n\ndatasets:\n  - file: eval.py\n    format: py\n",
+        encoding="utf-8",
+    )
+    (ctx / "eval.py").write_text(eval_py, encoding="utf-8")
+    return ctx
 
 
 def _good_summary_json() -> str:
@@ -273,6 +296,65 @@ def test_baseline_regression_exit_via_diff_reports() -> None:
     assert diff_reports(good.to_json(), good.to_json()) == ([], False)
 
 
+def test_diff_reports_duplicate_id_regresses() -> None:
+    baseline = {
+        "mean": 0.5,
+        "scores": [
+            {"id": "dup", "passed": True, "score": 1.0},
+            {"id": "dup", "passed": False, "score": 0.0},
+        ],
+    }
+    current = {"mean": 0.5, "scores": [{"id": "dup", "passed": False, "score": 0.0}]}
+
+    regressed_ids, mean_regressed = diff_reports(baseline, current)
+
+    assert "dup" in regressed_ids
+    assert mean_regressed is False
+
+
+def test_diff_reports_disappeared_passing_sample_regresses() -> None:
+    baseline = {
+        "mean": 1.0,
+        "scores": [
+            {"id": "a", "passed": True, "score": 1.0},
+            {"id": "b", "passed": True, "score": 1.0},
+        ],
+    }
+    current = {"mean": 1.0, "scores": [{"id": "a", "passed": True, "score": 1.0}]}
+
+    regressed_ids, mean_regressed = diff_reports(baseline, current)
+
+    assert "b" in regressed_ids
+    assert mean_regressed is False
+
+
+def test_diff_reports_unique_id_path_unchanged() -> None:
+    report = {
+        "mean": 1.0,
+        "scores": [
+            {"id": "a", "passed": True, "score": 1.0},
+            {"id": "b", "passed": True, "score": 1.0},
+        ],
+    }
+
+    assert diff_reports(report, report) == ([], False)
+
+
+def test_run_eval_deduplicates_duplicate_sample_names(tmp_path: Path) -> None:
+    ctx = _write_eval_ctx(
+        tmp_path,
+        "from dotctx.eval_types import Sample\n\n"
+        "def sample(limit: int = -1):\n"
+        "    return [Sample(name='dup', input={'task': 'a'}), Sample(name='dup', input={'task': 'b'})]\n\n"
+        "def score(_input, _output, _expected):\n"
+        "    return 1.0\n",
+    )
+
+    report = run(run_eval(str(ctx), acompletion=SingleShotFake('{"x": 1}')))
+
+    assert [s.id for s in report.scores] == ["dup", "dup#1"]
+
+
 def test_concurrency_bounded(tmp_path: Path) -> None:
     ctx = tmp_path / "parallel.ctx"
     ctx.mkdir()
@@ -366,6 +448,41 @@ def test_missing_eval_py_is_teaching_error() -> None:
         run_eval_sync(str(FIXTURES / "cluster_label.ctx"))
 
     assert cli.main(["eval", str(FIXTURES / "cluster_label.ctx")]) == 4
+
+
+@pytest.mark.parametrize(
+    ("sample_return", "message"),
+    [
+        ("None", "got NoneType"),
+        ("[{'input': {'task': 'x'}}]", "raw dicts"),
+        ("5", "got int"),
+    ],
+)
+def test_run_eval_malformed_sample_return_is_value_error(
+    tmp_path: Path, sample_return: str, message: str
+) -> None:
+    ctx = _write_eval_ctx(
+        tmp_path,
+        "def sample(limit: int = -1):\n"
+        f"    return {sample_return}\n\n"
+        "def score(_input, _output, _expected):\n"
+        "    return 1.0\n",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        run(run_eval(str(ctx), acompletion=SingleShotFake('{"x": 1}')))
+
+
+def test_tool_descriptions_flow_to_provider_defs() -> None:
+    rich = load_rich_dotctx(str(FIXTURES / "execute_eval.ctx"), env={})
+
+    assert rich.expected_tool_descriptions["record_memory"] == "Store one memory."
+    tool_defs = _provider_tool_defs(
+        rich.expected_tool_schemas,
+        rich.expected_tool_descriptions,
+    )
+    by_name = {d["function"]["name"]: d["function"] for d in tool_defs}
+    assert by_name["record_memory"]["description"] == "Store one memory."
 
 
 def test_tool_loop_recovers_from_raising_tool() -> None:

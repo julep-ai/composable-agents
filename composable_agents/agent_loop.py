@@ -56,6 +56,20 @@ from .validate import Diagnostic
 ROUND_NOTE_KEY = "__round_note__"
 
 
+def coerce_round_note(note: Any) -> Optional[str]:
+    """Enforce the round_note pure's ``(ctx) -> Optional[str]`` contract.
+
+    None means "no note this round"; a str is the note. Any other type is a
+    loud teaching error (G-8: no silent fallbacks) rather than a value that
+    would be silently dropped by the prompt renderer.
+    """
+    if note is None or isinstance(note, str):
+        return note
+    raise ValueError(
+        f"round_note pure must return str | None, got {type(note).__name__}: {note!r}"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Round decisions.
 # --------------------------------------------------------------------------- #
@@ -670,6 +684,7 @@ __all__ = [
     "state_fingerprint",
     "terminal_result",
     "CallDenial",
+    "coerce_round_note",
     "precheck_controller",
     "contract_for_tool",
     "approval_required_for_tool",

@@ -48,7 +48,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional, Sequence
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.client import WorkflowFailureError, WorkflowUpdateFailedError
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ActivityError, ApplicationError
 
 # Best-effort swallow paths log via stdlib logging: it never raises, works
 # outside a live workflow runtime (so the helpers stay unit-testable by direct
@@ -2066,12 +2066,12 @@ class AgentWorkflow:
             if note_fn is not None:
                 # Fresh each round from loop state only; deterministic under
                 # Temporal replay because the function is a registered pure.
-                note = note_fn({
+                note = al.coerce_round_note(note_fn({
                     "round": state.round,
                     "maxRounds": cfg.max_rounds,
                     "spent": state.spent,
                     "callCounts": dict(state.call_counts),
-                })
+                }))
                 if note is not None:
                     controller_value[al.ROUND_NOTE_KEY] = note
 
@@ -2197,24 +2197,29 @@ class AgentWorkflow:
                     if call_input is None:
                         call_input = state.last
                     contract = al.contract_for_tool(tool, contracts)
-                    out = await workflow.execute_activity(
-                        callTool,
-                        CallToolInput(
-                            tool_ref=_toolref_json_from_key(tool),
-                            value=call_input,
-                            cid=f"{inp.session_id}-call-{state.round}-{index}",
-                            principal=inp.principal,
-                            run_id=inp.session_id,
-                            root_run_id=(inp.root_run_id or inp.session_id),
-                            segment_seq=inp.segment_seq,
-                            op="call",
-                            kind="tool",
-                        ),
-                        start_to_close_timeout=timedelta(seconds=policy.tool_timeout_s),
-                        retry_policy=_retry_policy_for(contract, policy),
-                    )
+                    error: Optional[str] = None
+                    try:
+                        out = await workflow.execute_activity(
+                            callTool,
+                            CallToolInput(
+                                tool_ref=_toolref_json_from_key(tool),
+                                value=call_input,
+                                cid=f"{inp.session_id}-call-{state.round}-{index}",
+                                principal=inp.principal,
+                                run_id=inp.session_id,
+                                root_run_id=(inp.root_run_id or inp.session_id),
+                                segment_seq=inp.segment_seq,
+                                op="call",
+                                kind="tool",
+                            ),
+                            start_to_close_timeout=timedelta(seconds=policy.tool_timeout_s),
+                            retry_policy=_retry_policy_for(contract, policy),
+                        )
+                    except ActivityError as exc:
+                        error = repr(exc)
+                        out = {"error": error, "tool": tool}
                     output_ref: Optional[str] = None
-                    if policy.trace_content_refs:
+                    if error is None and policy.trace_content_refs:
                         output_ref = await workflow.execute_activity(
                             putBlob,
                             PutBlobInput(tenant=inp.session_id, value=out),
@@ -2237,6 +2242,7 @@ class AgentWorkflow:
                             cost=al.DEFAULT_TOOL_COST,
                             call_id=entry.get("id"),
                             output_ref=output_ref,
+                            error=error,
                         ),
                     )
 
@@ -2301,26 +2307,31 @@ class AgentWorkflow:
                 if call_input is None:
                     call_input = state.last
                 contract = al.contract_for_tool(tool, contracts)
-                out = await workflow.execute_activity(
-                    callTool,
-                    CallToolInput(
-                        tool_ref=_toolref_json_from_key(tool),
-                        value=call_input,
-                        cid=f"{inp.session_id}-call-{state.round}",
-                        principal=inp.principal,
-                        run_id=inp.session_id,
-                        root_run_id=(inp.root_run_id or inp.session_id),
-                        segment_seq=inp.segment_seq,
-                        op="call",
-                        kind="tool",
-                    ),
-                    start_to_close_timeout=timedelta(seconds=policy.tool_timeout_s),
-                    retry_policy=_retry_policy_for(contract, policy),
-                )
+                error: Optional[str] = None
+                try:
+                    out = await workflow.execute_activity(
+                        callTool,
+                        CallToolInput(
+                            tool_ref=_toolref_json_from_key(tool),
+                            value=call_input,
+                            cid=f"{inp.session_id}-call-{state.round}",
+                            principal=inp.principal,
+                            run_id=inp.session_id,
+                            root_run_id=(inp.root_run_id or inp.session_id),
+                            segment_seq=inp.segment_seq,
+                            op="call",
+                            kind="tool",
+                        ),
+                        start_to_close_timeout=timedelta(seconds=policy.tool_timeout_s),
+                        retry_policy=_retry_policy_for(contract, policy),
+                    )
+                except ActivityError as exc:
+                    error = repr(exc)
+                    out = {"error": error, "tool": tool}
                 state.charge(cost)
                 state.last = out
                 output_ref: Optional[str] = None
-                if policy.trace_content_refs:
+                if error is None and policy.trace_content_refs:
                     output_ref = await workflow.execute_activity(
                         putBlob,
                         PutBlobInput(tenant=inp.session_id, value=out),
@@ -2330,7 +2341,13 @@ class AgentWorkflow:
                         ),
                     )
                 state.record(
-                    al.TraceEntry(decision="call", ref=tool, cost=cost, output_ref=output_ref)
+                    al.TraceEntry(
+                        decision="call",
+                        ref=tool,
+                        cost=cost,
+                        output_ref=output_ref,
+                        error=error,
+                    )
                 )
 
             else:  # Decision.SUB

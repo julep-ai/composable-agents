@@ -979,6 +979,105 @@ async def _agent_native_tools_call_many(env):
     assert seen_values[1]["input"] == res["output"]
 
 
+async def _agent_call_many_tool_error_folds_to_observation(env):
+    tool_defs = [
+        {
+            "type": "function",
+            "function": {
+                "name": "srv/double",
+                "description": "",
+                "parameters": {"type": "number"},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "srv/fail",
+                "description": "",
+                "parameters": {"type": "number"},
+            },
+        },
+    ]
+    agents = {
+        "native_error_ctrl": {
+            "config": {
+                "nativeTools": True,
+                "maxRounds": 4,
+                "budget": {"cost": 1000},
+            },
+            "grantedTools": ["srv/double", "srv/fail"],
+            "grantedContracts": {
+                "srv/double": {"effect": "read", "idempotency": "native"},
+                "srv/fail": {"effect": "read", "idempotency": "native"},
+            },
+            "toolDefs": tool_defs,
+        }
+    }
+    seen_values = []
+
+    async def native_llm(reasoner, value, principal, transcript, dispatch, *, tools=None):  # noqa: ANN001
+        del principal, transcript, dispatch
+        assert reasoner.name == "native_error_ctrl"
+        assert tools == tool_defs
+        seen_values.append(value)
+        if len(seen_values) == 1:
+            return {
+                "tool_calls": [
+                    {"id": "ok", "tool": "srv/double", "input": 3},
+                    {"id": "bad", "tool": "srv/fail", "input": 1},
+                ]
+            }
+        observations = value["input"]
+        assert observations[0] == {"id": "ok", "tool": "srv/double", "output": 6}
+        failed = observations[1]
+        assert failed["id"] == "bad"
+        assert failed["tool"] == "srv/fail"
+        failed_output = failed["output"]
+        assert isinstance(failed_output, dict)
+        assert failed_output["tool"] == "srv/fail"
+        assert failed_output["error"]
+        return {"done": True, "output": observations}
+
+    async with _worker(
+        env,
+        task_queue="ca-agent-call-many-tool-error",
+        agents=agents,
+        llm=native_llm,
+        extra_reasoners=(Reasoner(name="native_error_ctrl", model="test", system="native"),),
+    ):
+        sid = f"native-tools-error-{uuid.uuid4()}"
+        res = await env.client.execute_workflow(
+            AgentWorkflow.run,
+            AgentInput(
+                controller="native_error_ctrl",
+                session_id=sid,
+                input={"task": "go"},
+                policy=ExecutionPolicy().to_json(),
+            ),
+            id=sid,
+            task_queue="ca-agent-call-many-tool-error",
+        )
+
+    assert res["status"] == "done", res
+    assert res["output"][0] == {"id": "ok", "tool": "srv/double", "output": 6}
+    failed = res["output"][1]
+    assert failed["id"] == "bad"
+    assert failed["tool"] == "srv/fail"
+    failed_output = failed["output"]
+    assert isinstance(failed_output, dict)
+    assert failed_output["tool"] == "srv/fail"
+    assert failed_output["error"]
+
+    calls = [t for t in res["trace"] if t["decision"] == "call"]
+    assert [(t["ref"], t["callId"]) for t in calls] == [
+        ("srv/double", "ok"),
+        ("srv/fail", "bad"),
+    ]
+    assert "error" not in calls[0]
+    assert calls[1].get("error")
+    assert seen_values[1]["input"] == res["output"]
+
+
 async def _agent_native_tools_without_tool_defs_fails(env):
     async with _worker(
         env,
@@ -1035,6 +1134,7 @@ async def _run_all():
         await _agent_trace_fidelity(env)
         await _pure_drift_fails_before_effect(env)
         await _agent_native_tools_call_many(env)
+        await _agent_call_many_tool_error_folds_to_observation(env)
         await _agent_native_tools_without_tool_defs_fails(env)
 
 

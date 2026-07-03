@@ -348,8 +348,13 @@ async def complete_reasoner(
 
     # Render named system/user templates here so both seams (activity + facade)
     # see the same strings; already-rendered reasoners pass through unchanged.
-    reasoner = rendered_reasoner_for(reasoner, value)
-    user_text = rendered_user_for(reasoner, value)
+    render_value = (
+        {k: v for k, v in value.items() if k != ROUND_NOTE_KEY}
+        if isinstance(value, Mapping)
+        else value
+    )
+    reasoner = rendered_reasoner_for(reasoner, render_value)
+    user_text = rendered_user_for(reasoner, render_value)
     provider, model = _split_model(reasoner.model, default_provider)
     schema = reasoner.reply_schema
     # mem-mcp's declarative json_object mode claims the kwarg only when no

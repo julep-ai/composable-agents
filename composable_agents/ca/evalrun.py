@@ -75,11 +75,61 @@ class EvalReport:
         )
 
 
-def _provider_tool_defs(expected: Mapping[str, dict[str, Any]]) -> list[dict[str, Any]]:
+def _provider_tool_defs(
+    expected: Mapping[str, dict[str, Any]],
+    descriptions: Mapping[str, str],
+) -> list[dict[str, Any]]:
     return [
-        {"type": "function", "function": {"name": key, "description": "", "parameters": schema}}
+        {
+            "type": "function",
+            "function": {
+                "name": key,
+                "description": descriptions.get(key, ""),
+                "parameters": schema,
+            },
+        }
         for key, schema in expected.items()
     ]
+
+
+def _validate_samples(loaded: Any) -> list[Sample]:
+    """Validate the eval.py sample() contract as a setup-time error.
+
+    A wrong return (None, a scalar, or raw dicts) surfaces as ValueError so
+    `ca eval` exits 4 instead of crashing while scoring.
+    """
+    if loaded is None or isinstance(loaded, (str, bytes, Mapping)):
+        raise ValueError(
+            f"eval sample() must return an iterable of Sample, got {type(loaded).__name__}"
+        )
+    try:
+        items = list(loaded)
+    except TypeError as exc:
+        raise ValueError(
+            f"eval sample() must return an iterable of Sample, got {type(loaded).__name__}"
+        ) from exc
+    for i, s in enumerate(items):
+        if not isinstance(s, Sample):
+            raise ValueError(
+                f"eval sample()[{i}] must be a Sample, got {type(s).__name__} "
+                "(construct Sample(input=..., expected=...), do not return raw dicts)"
+            )
+    return items
+
+
+def _unique_sample_ids(samples: Sequence[Sample]) -> list[str]:
+    counts: dict[str, int] = {}
+    ids: list[str] = []
+    for i, s in enumerate(samples):
+        base = s.name if s.name else f"sample-{i}"
+        n = counts.get(base)
+        if n is None:
+            counts[base] = 0
+            ids.append(base)
+        else:
+            counts[base] = n + 1
+            ids.append(f"{base}#{counts[base]}")
+    return ids
 
 
 def _resolve_mock(
@@ -171,7 +221,10 @@ async def _run_tool_loop(
     acompletion: AnyCompletion,
 ) -> Any:
     reasoner = rich.reasoner
-    tool_defs = _provider_tool_defs(rich.expected_tool_schemas)
+    tool_defs = _provider_tool_defs(
+        rich.expected_tool_schemas,
+        rich.expected_tool_descriptions,
+    )
     stop_on = sample.stop_on
     turns_bound = getattr(stop_on, "_ca_max_turns", None)
     if isinstance(turns_bound, int):
@@ -310,7 +363,8 @@ async def run_eval(
         loaded_samples = await raw if inspect.isawaitable(raw) else raw
     except Exception as exc:  # noqa: BLE001 - user eval.py sample() code -> setup error (exit 4)
         raise ValueError(f"eval sample() failed: {exc!r}") from exc
-    samples: Sequence[Sample] = loaded_samples
+    samples = _validate_samples(loaded_samples)
+    sids = _unique_sample_ids(samples)
 
     is_tool_loop = bool(reasoner.tools)
     sem = asyncio.Semaphore(max(1, concurrency))
@@ -327,8 +381,7 @@ async def run_eval(
                 s = float(value)
             except Exception as exc:  # noqa: BLE001 - user eval.py score() code -> setup error (exit 4)
                 raise ValueError(f"eval score() failed: {exc!r}") from exc
-            name = sample.name
-            sid = name if name else f"sample-{index}"
+            sid = sids[index]
             return SampleScore(id=sid, score=s, passed=s >= threshold)
 
     results = await asyncio.gather(*(score_one(i, s) for i, s in enumerate(samples)))
@@ -360,14 +413,23 @@ def diff_reports(
     *,
     mean_tolerance: float = 0.01,
 ) -> tuple[list[str], bool]:
-    base_by_id = {str(s["id"]): s for s in baseline.get("scores", []) if isinstance(s, dict)}
+    def _passes_by_id(report: Mapping[str, Any]) -> dict[str, list[bool]]:
+        groups: dict[str, list[bool]] = {}
+        for s in report.get("scores", []):
+            if isinstance(s, dict):
+                groups.setdefault(str(s["id"]), []).append(bool(s.get("passed")))
+        return groups
+
+    base = _passes_by_id(baseline)
+    cur = _passes_by_id(current)
     regressed: list[str] = []
-    for s in current.get("scores", []):
-        if not isinstance(s, dict):
-            continue
-        sid = str(s["id"])
-        b = base_by_id.get(sid)
-        if b is not None and b.get("passed") and not s.get("passed"):
+    for sid, base_passes in base.items():
+        # Optimistic on baseline, pessimistic on current: duplicate ids or
+        # disappeared samples must not hide a passed -> failed regression.
+        was_passing = any(base_passes)
+        cur_passes = cur.get(sid)
+        now_passing = cur_passes is not None and bool(cur_passes) and all(cur_passes)
+        if was_passing and not now_passing:
             regressed.append(sid)
     mean_regressed = (float(baseline.get("mean", 0.0)) - float(current.get("mean", 0.0))) > mean_tolerance
     return regressed, mean_regressed

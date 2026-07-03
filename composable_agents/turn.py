@@ -31,6 +31,7 @@ from .agent_loop import (
     authorize_subflow,
     charge_tool_call,
     contract_for_tool,
+    coerce_round_note,
     interpret_reasoner_reply,
     terminal_result,
     would_exceed_budget,
@@ -161,12 +162,12 @@ def controller_turn(
         if note_fn is not None:
             # Fresh each round from loop state only; deterministic under Temporal
             # replay because the function is a registered pure.
-            note = note_fn({
+            note = coerce_round_note(note_fn({
                 "round": state.round,
                 "maxRounds": cfg.max_rounds,
                 "spent": state.spent,
                 "callCounts": dict(state.call_counts),
-            })
+            }))
             if note is not None:
                 # The LLM prompt path (execution/llm.py _messages) renders this
                 # reserved key as a trailing system line; namespaced so ordinary

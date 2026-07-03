@@ -392,15 +392,13 @@ def _cfg_with_app_overrides(
     cfg: AgentConfig,
     app_config: Optional[dict[str, Any]],
 ) -> AgentConfig:
-    if not app_config or (
-        "budget" not in app_config and "maxRounds" not in app_config
-    ):
+    override_keys = ("budget", "maxRounds", "roundNote")
+    if not app_config or not any(key in app_config for key in override_keys):
         return cfg
     data = cfg.to_json()
-    if "budget" in app_config:
-        data["budget"] = app_config["budget"]
-    if "maxRounds" in app_config:
-        data["maxRounds"] = app_config["maxRounds"]
+    for key in override_keys:
+        if key in app_config:
+            data[key] = app_config[key]
     return AgentConfig.from_json(data)
 
 

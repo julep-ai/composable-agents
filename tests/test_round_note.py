@@ -11,7 +11,11 @@ import pytest
 from composable_agents import AgentConfig, app, deploy
 from composable_agents.agent_loop import ROUND_NOTE_KEY, AgentState, drive_agent_loop
 from composable_agents.dotctx import Reasoner
-from composable_agents.execution.cma import drive_cma_agent_loop
+from composable_agents.execution.cma import (
+    _cfg_with_app_overrides,
+    _reject_round_note_on_cma,
+    drive_cma_agent_loop,
+)
 from composable_agents.execution.llm import complete_reasoner
 from composable_agents.ir import Node
 from composable_agents.prompt import register_renderer
@@ -126,6 +130,40 @@ def test_complete_reasoner_appends_round_note_after_rendered_user_turn() -> None
     ]
 
 
+def test_complete_reasoner_hides_round_note_from_render_context() -> None:
+    renderer_name = "tests.round_note.whole_context_user_render"
+    note = "[REMAINING ROUNDS: 3]"
+
+    def render_user(ctx: Mapping[str, Any]) -> str:
+        return json.dumps(ctx, sort_keys=True)
+
+    previous = _replace_renderer(renderer_name, render_user)
+    try:
+        captured: dict[str, Any] = {}
+
+        reasoner = Reasoner(
+            name="tests.round_note.isolated_render_context_reasoner",
+            model="anthropic:claude-test",
+            system="system prompt",
+            user_render=renderer_name,
+        )
+        value = {"input": "question", "trace": [], ROUND_NOTE_KEY: note}
+
+        out = asyncio.run(
+            complete_reasoner(reasoner, value, acompletion=_capture_completion(captured))
+        )
+    finally:
+        _restore_renderer(renderer_name, previous)
+
+    assert out.reply == "ok"
+    assert ROUND_NOTE_KEY not in captured["messages"][1]["content"]
+    assert captured["messages"] == [
+        {"role": "system", "content": "system prompt"},
+        {"role": "user", "content": json.dumps({"input": "question", "trace": []}, sort_keys=True)},
+        {"role": "system", "content": note},
+    ]
+
+
 def test_complete_reasoner_appends_round_note_without_user_renderer() -> None:
     captured: dict[str, Any] = {}
     note = "[REMAINING ROUNDS: 3]"
@@ -225,6 +263,33 @@ def test_round_note_none_return_omits_note_key() -> None:
     assert out["status"] == "done"
     assert payloads
     assert all(ROUND_NOTE_KEY not in payload for payload in payloads)
+
+
+def test_round_note_non_string_return_raises_value_error() -> None:
+    name = "tests.round_note.bad_type"
+
+    def bad_note(_ctx: dict[str, Any]) -> int:
+        return 12
+
+    previous = _replace_pure(name, bad_note)
+    try:
+        async def invoke_controller(_payload: dict[str, Any]) -> Any:
+            raise AssertionError("controller should not run")
+
+        async def call_tool(actual_tool: str, value: Any) -> Any:
+            raise AssertionError(f"tool should not run: {actual_tool} {value!r}")
+
+        with pytest.raises(ValueError, match="round_note pure must return str"):
+            asyncio.run(
+                drive_agent_loop(
+                    input="q",
+                    cfg=AgentConfig(max_rounds=2, round_note=name),
+                    invoke_controller=invoke_controller,
+                    call_tool=call_tool,
+                )
+            )
+    finally:
+        _restore_pure(name, previous)
 
 
 def test_round_note_ctx_contains_only_round_budget_spend_and_call_counts() -> None:
@@ -355,3 +420,14 @@ def test_cma_backend_refuses_round_note() -> None:
                 call_tool=call_tool,
             )
         )
+
+
+def test_cma_app_config_round_note_override_is_rejected() -> None:
+    cfg = _cfg_with_app_overrides(
+        AgentConfig(),
+        {"roundNote": ROUND_NOTE_NAME},
+    )
+
+    assert cfg.round_note == ROUND_NOTE_NAME
+    with pytest.raises(ValueError, match="round_note is not supported on the CMA backend"):
+        _reject_round_note_on_cma(cfg)
