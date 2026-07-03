@@ -579,6 +579,10 @@ class DbosEnv:
                 config["summarizer"] = app_config["summarizer"]
             if "roundNote" in app_config:
                 config["roundNote"] = app_config["roundNote"]
+            if "nativeTools" in app_config:
+                config["nativeTools"] = app_config["nativeTools"]
+            if "requireToolCall" in app_config:
+                config["requireToolCall"] = app_config["requireToolCall"]
 
             tools = app_config.get("tools") if "tools" in app_config else None
             granted_tools = None if tools is None else list(tools)
@@ -912,15 +916,18 @@ async def agent_workflow(inp: dict) -> Any:
             return finalize(
                 al.terminal_result(pre.status, state, output=pre.output, reason=pre.reason)
             )
+        prev_trace_len = len(state.trace)
         result = await step(state)
         if isinstance(result, Halt):
             return finalize(
                 al.terminal_result(result.status, state, output=result.output, reason=result.reason)
             )
         state = result
-        if policy.trace_content_refs and state.trace:
-            state.trace[-1].output_ref = await putBlobStep(
-                {"tenant": session, "value": state.last}
+        if policy.trace_content_refs:
+            await al.blob_round_output_refs(
+                state,
+                prev_trace_len,
+                lambda value: putBlobStep({"tenant": session, "value": value}),
             )
         # §6 seam, POST-action exactly like the Temporal harness: a top-of-loop
         # check would re-fire forever once round >= continueAsNewAfter.

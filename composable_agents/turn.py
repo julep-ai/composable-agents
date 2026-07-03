@@ -23,6 +23,8 @@ from .agent_loop import (
     CallDenial,
     DEFAULT_TOOL_COST,
     Decision,
+    REQUIRE_TOOL_CALL_NEVER_CALLED_REASON,
+    REQUIRE_TOOL_CALL_REASK_MESSAGE,
     ROUND_NOTE_KEY,
     TraceEntry,
     ToolCaller,
@@ -203,9 +205,9 @@ def controller_turn(
                 if reasks >= 2:
                     return Halt(
                         "controller_error",
-                        reason="require_tool_call: controller never called a tool",
+                        reason=REQUIRE_TOOL_CALL_NEVER_CALLED_REASON,
                     )
-                message = "require_tool_call: reply with a tool call, not text"
+                message = REQUIRE_TOOL_CALL_REASK_MESSAGE
                 state.last = {"error": message, "reply": action.payload}
                 state.record(TraceEntry(decision="reask", error=message))
                 state.round += 1

@@ -11,12 +11,15 @@ from composable_agents.agent_loop import (
     DEFAULT_TOOL_COST,
     AgentConfig,
     Decision,
+    NATIVE_TOOLS_KEY,
     RoundAction,
     TraceEntry,
     action_cost,
     drive_agent_loop,
     interpret_reasoner_reply,
 )
+from composable_agents.execution.interpreter import _app_config
+from composable_agents.ir import Node
 
 
 def test_interpret_reasoner_reply_native_tool_calls() -> None:
@@ -95,6 +98,67 @@ def test_agent_config_native_tools_json_round_trips() -> None:
 
     assert AgentConfig.from_json({"native_tools": True}).native_tools is True
     assert AgentConfig.from_json({}).native_tools is False
+
+
+def test_app_ir_serializes_native_tool_flags_and_round_trips() -> None:
+    encoded = app(
+        "c",
+        tools=["x"],
+        native_tools=True,
+        require_tool_call=True,
+    ).to_json()
+
+    assert encoded["nativeTools"] is True
+    assert encoded["requireToolCall"] is True
+    assert Node.from_json(encoded).to_json() == encoded
+
+
+def test_app_ir_omits_native_tool_flags_when_false() -> None:
+    encoded = app("c", tools=["x"]).to_json()
+
+    assert "nativeTools" not in encoded
+    assert "requireToolCall" not in encoded
+
+
+def test_app_config_surfaces_native_tool_flags_only_when_present() -> None:
+    native_config = _app_config(
+        app(
+            "c",
+            tools=["x"],
+            native_tools=True,
+            require_tool_call=True,
+        )
+    )
+    assert native_config is not None
+    assert native_config["nativeTools"] is True
+    assert native_config["requireToolCall"] is True
+
+    plain_config = _app_config(app("c", tools=["x"]))
+    assert plain_config is not None
+    assert "nativeTools" not in plain_config
+    assert "requireToolCall" not in plain_config
+
+
+def test_agent_facade_serializes_native_tool_flags_only_when_enabled() -> None:
+    @tool(effect="read", idempotent=True, name="ir_flags_lookup")
+    def lookup(value: str) -> dict[str, str]:
+        return {"value": value}
+
+    native_agent = Agent(
+        "m",
+        tools=[lookup],
+        name="ir_flags_agent",
+        native_tools=True,
+        require_tool_call=True,
+    )
+    native_json = native_agent.to_ir().to_json()
+    assert native_json["nativeTools"] is True
+    assert native_json["requireToolCall"] is True
+
+    plain_agent = Agent("m", tools=[lookup], name="ir_no_flags_agent")
+    plain_json = plain_agent.to_ir().to_json()
+    assert "nativeTools" not in plain_json
+    assert "requireToolCall" not in plain_json
 
 
 def test_trace_entry_call_id_json_round_trips_and_loads_old_format() -> None:
@@ -428,7 +492,7 @@ def test_agent_facade_passes_provider_tool_defs_only_when_native_tools_enabled()
 
     def native_llm(_reasoner_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         native_payloads.append(payload)
-        assert payload["tools"] == expected_defs
+        assert payload[NATIVE_TOOLS_KEY] == expected_defs
         return {"done": True, "output": "native-ok"}
 
     native_agent = Agent(
@@ -442,7 +506,7 @@ def test_agent_facade_passes_provider_tool_defs_only_when_native_tools_enabled()
 
     assert native_result["status"] == "done"
     assert native_result["output"] == "native-ok"
-    assert native_payloads[0]["tools"] == expected_defs
+    assert native_payloads[0][NATIVE_TOOLS_KEY] == expected_defs
 
     legacy_payloads: list[dict[str, Any]] = []
 
@@ -481,7 +545,7 @@ def test_agent_open_local_session_passes_provider_tool_defs_for_native_tools() -
 
     def llm(_reasoner_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         payloads.append(payload)
-        assert payload["tools"] == expected_defs
+        assert payload[NATIVE_TOOLS_KEY] == expected_defs
         if len(payloads) == 1:
             return {
                 "tool_calls": [

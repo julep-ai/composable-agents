@@ -38,11 +38,12 @@ import asyncio
 import dataclasses
 import json
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Optional
 
-from ..agent_loop import ROUND_NOTE_KEY
+from ..agent_loop import NATIVE_TOOLS_KEY, ROUND_NOTE_KEY
 from ..dotctx import Reasoner, get_reasoner
 from ..errors import ResilienceExhausted
 from ..prompt import rendered_reasoner_for, rendered_user_for
@@ -71,6 +72,7 @@ DEFAULT_PROVIDER = "anthropic"
 # (mozilla-ai/any-llm issues #541 gemini, #542 xai.)
 _PROMPT_FALLBACK_PROVIDERS = frozenset({"gemini", "xai"})
 _DEFAULT_REASONER_DISPATCH = ReasonerDispatch()
+_PROVIDER_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]")
 
 
 # --------------------------------------------------------------------------- #
@@ -114,6 +116,52 @@ def _qos_request_fields(provider: str, qos: QoSTier) -> dict[str, Any]:
             QoSTier.FLEX: {"service_tier": "standard_only"},
         }[qos]
     return {}
+
+
+def provider_safe_tool_name(name: str) -> str:
+    """Provider-safe function name for OpenAI-compatible native tool APIs."""
+    safe = _PROVIDER_SAFE_RE.sub("_", name)
+    return safe[:64] if len(safe) > 64 else safe
+
+
+def _provider_safe_collision_name(base: str, n: int) -> str:
+    suffix = f"_{n}"
+    return f"{base[: 64 - len(suffix)]}{suffix}"
+
+
+def provider_safe_tool_defs(
+    tools: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Rewrite tool function names to provider-safe aliases.
+
+    Returns ``(safe_tools, reverse)`` where ``reverse`` maps provider aliases
+    back to the original tool keys. If no rewrite is needed, preserves the
+    original list identity and returns an empty reverse map.
+    """
+    needs_rewrite = False
+    reverse: dict[str, str] = {}
+    used: set[str] = set()
+    safe_tools: list[dict[str, Any]] = []
+    for tool_def in tools:
+        fn = tool_def.get("function", {}) if isinstance(tool_def, dict) else {}
+        original = fn.get("name", "")
+        safe = provider_safe_tool_name(original)
+        if safe != original:
+            needs_rewrite = True
+        base = safe
+        n = 2
+        while safe in used and reverse.get(safe) != original:
+            safe = _provider_safe_collision_name(base, n)
+            n += 1
+            needs_rewrite = True
+        used.add(safe)
+        if safe != original:
+            reverse[safe] = original
+        new_fn = {**fn, "name": safe}
+        safe_tools.append({**tool_def, "function": new_fn})
+    if not needs_rewrite:
+        return tools, {}
+    return safe_tools, reverse
 
 
 def _strip_code_fence(text: str) -> str:
@@ -361,6 +409,19 @@ async def complete_reasoner(
     # reply schema does (the schema path wins; the call never carries both).
     json_object = schema is None and reasoner.response_format == "json_object"
     has_tools = bool(tools)
+    safe_tools, tool_name_reverse = (
+        provider_safe_tool_defs(tools) if tools else (tools, {})
+    )
+
+    def _restore_tool_calls(parsed: Any) -> Any:
+        if tool_name_reverse and isinstance(parsed, dict):
+            calls = parsed.get("tool_calls")
+            if isinstance(calls, list):
+                for tool_call in calls:
+                    if isinstance(tool_call, dict):
+                        tool = tool_call.get("tool")
+                        tool_call["tool"] = tool_name_reverse.get(tool, tool)
+        return parsed
 
     async def call(*, native: bool, retry_note: Optional[str] = None) -> Any:
         # Native tool rounds cannot carry response_format; keep schema guidance
@@ -389,7 +450,7 @@ async def complete_reasoner(
             )
             kwargs = {}
         if has_tools:
-            kwargs["tools"] = tools
+            kwargs["tools"] = safe_tools
             if parallel_tool_calls is not None:
                 kwargs["parallel_tool_calls"] = parallel_tool_calls
         if retry_note is not None:
@@ -443,6 +504,7 @@ async def complete_reasoner(
     reply, native_tool_calls = _parse_completion_reply(
         completion, expect_json=schema is not None
     )
+    reply = _restore_tool_calls(reply)
     while (
         schema is not None
         and not isinstance(reply, dict)
@@ -462,6 +524,7 @@ async def complete_reasoner(
         apt, act, att = _usage_of(completion)
         pt, ct, tt = _add_tokens(pt, apt), _add_tokens(ct, act), _add_tokens(tt, att)
         reply, native_tool_calls = _parse_completion_reply(completion, expect_json=True)
+        reply = _restore_tool_calls(reply)
     ended = time.time()
     meta = LlmCallMeta(
         served_model=_served_model_of(completion, model),
@@ -542,9 +605,9 @@ def make_local_reasoner(
     async def caller(reasoner_name: str, payload: Any) -> Any:
         tools = None
         value = payload
-        if isinstance(payload, dict) and "tools" in payload:
-            tools = payload["tools"]
-            value = {key: val for key, val in payload.items() if key != "tools"}
+        if isinstance(payload, dict) and NATIVE_TOOLS_KEY in payload:
+            tools = payload[NATIVE_TOOLS_KEY]
+            value = {key: val for key, val in payload.items() if key != NATIVE_TOOLS_KEY}
         return await complete_reasoner(
             get_reasoner(reasoner_name),
             value,
@@ -725,4 +788,6 @@ __all__ = [
     "make_llm_caller",
     "make_local_reasoner",
     "make_resilient_llm_caller",
+    "provider_safe_tool_defs",
+    "provider_safe_tool_name",
 ]

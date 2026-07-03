@@ -8,6 +8,7 @@ ahead of the implementation and currently fail on the missing passthrough seam.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -16,6 +17,8 @@ from composable_agents.execution.llm import (
     complete_reasoner,
     make_llm_caller,
     make_resilient_llm_caller,
+    provider_safe_tool_defs,
+    provider_safe_tool_name,
 )
 from composable_agents.execution.llm_result import LlmCallMeta
 from composable_agents.resilience import ResiliencePolicy
@@ -123,6 +126,74 @@ def test_tools_and_parallel_tool_calls_forwarded_verbatim() -> None:
     call = rec.calls[0]
     assert call["tools"] is tools
     assert call["parallel_tool_calls"] is False
+
+
+def test_mcp_style_tool_names_are_provider_safe_and_reversed() -> None:
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "srv/double",
+                "parameters": {"type": "object"},
+            },
+        }
+    ]
+    safe = provider_safe_tool_name("srv/double")
+    assert "/" not in safe
+    assert re.fullmatch(r"[A-Za-z0-9_-]{1,64}", safe)
+    rec = Recorder([
+        _completion(tool_calls=[_tool_call("c1", safe, '{"n": 2}')])
+    ])
+
+    result = run(
+        make_llm_caller(acompletion=rec)(
+            Reasoner(name="mcp_nt", model="openai:gpt-4o", system="s"),
+            "x",
+            tools=tools,
+        )
+    )
+
+    provider_name = rec.calls[0]["tools"][0]["function"]["name"]
+    assert provider_name == safe
+    assert "/" not in provider_name
+    assert result.reply["tool_calls"][0]["tool"] == "srv/double"
+    assert result.reply["tool_calls"][0]["input"] == {"n": 2}
+
+
+def test_provider_safe_tool_defs_identity_when_all_names_safe() -> None:
+    tools = _tools()
+
+    safe_tools, reverse = provider_safe_tool_defs(tools)
+
+    assert safe_tools is tools
+    assert reverse == {}
+
+
+def test_provider_safe_tool_defs_disambiguates_collisions() -> None:
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "srv/x",
+                "parameters": {"type": "object"},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "srv_x",
+                "parameters": {"type": "object"},
+            },
+        },
+    ]
+
+    safe_tools, reverse = provider_safe_tool_defs(tools)
+    safe_names = [tool["function"]["name"] for tool in safe_tools]
+
+    assert len(set(safe_names)) == 2
+    assert all("/" not in name for name in safe_names)
+    assert reverse[safe_names[0]] == "srv/x"
+    assert reverse[safe_names[1]] == "srv_x"
 
 
 def test_tool_calls_reply_normalized_and_counted_in_order() -> None:

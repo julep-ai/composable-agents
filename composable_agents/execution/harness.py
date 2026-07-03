@@ -824,6 +824,10 @@ class _TemporalEnv:
                 config["summarizer"] = app_config["summarizer"]
             if "roundNote" in app_config:
                 config["roundNote"] = app_config["roundNote"]
+            if "nativeTools" in app_config:
+                config["nativeTools"] = app_config["nativeTools"]
+            if "requireToolCall" in app_config:
+                config["requireToolCall"] = app_config["requireToolCall"]
 
             tools = app_config.get("tools") if "tools" in app_config else None
             granted_tools = None if tools is None else list(tools)
@@ -2112,6 +2116,34 @@ class AgentWorkflow:
 
             # 2) Terminal decisions end the loop.
             if action.decision is al.Decision.FINISH:
+                if cfg.require_tool_call and not any(
+                    entry.decision == "call" and entry.error is None
+                    for entry in state.trace
+                ):
+                    reasks = sum(1 for entry in state.trace if entry.decision == "reask")
+                    if reasks >= 2:
+                        terminal = al.terminal_result(
+                            "controller_error",
+                            state,
+                            reason=al.REQUIRE_TOOL_CALL_NEVER_CALLED_REASON,
+                        )
+                        await self._finish_trajectory(
+                            inp.session_id,
+                            terminal,
+                            root_run_id=(inp.root_run_id or inp.session_id),
+                            segment_seq=inp.segment_seq,
+                        )
+                        return terminal
+                    state.last = {
+                        "error": al.REQUIRE_TOOL_CALL_REASK_MESSAGE,
+                        "reply": action.payload,
+                    }
+                    state.record(al.TraceEntry(
+                        decision="reask",
+                        error=al.REQUIRE_TOOL_CALL_REASK_MESSAGE,
+                    ))
+                    state.round += 1
+                    continue
                 terminal = al.terminal_result("done", state, output=action.payload)
                 await self._finish_trajectory(
                     inp.session_id,
@@ -2219,7 +2251,7 @@ class AgentWorkflow:
                         error = repr(exc)
                         out = {"error": error, "tool": tool}
                     output_ref: Optional[str] = None
-                    if error is None and policy.trace_content_refs:
+                    if policy.trace_content_refs:
                         output_ref = await workflow.execute_activity(
                             putBlob,
                             PutBlobInput(tenant=inp.session_id, value=out),
@@ -2331,7 +2363,7 @@ class AgentWorkflow:
                 state.charge(cost)
                 state.last = out
                 output_ref: Optional[str] = None
-                if error is None and policy.trace_content_refs:
+                if policy.trace_content_refs:
                     output_ref = await workflow.execute_activity(
                         putBlob,
                         PutBlobInput(tenant=inp.session_id, value=out),

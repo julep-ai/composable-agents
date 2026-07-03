@@ -278,6 +278,8 @@ def app(
     ctx: CtxArg = None,
     summarizer: Optional[str] = None,
     round_note: Optional[str] = None,
+    native_tools: bool = False,
+    require_tool_call: bool = False,
 ) -> Node:
     """Open-ended controller loop (Agent — the top of the lattice; use sparingly).
 
@@ -303,6 +305,8 @@ def app(
         ctx=_ctx(ctx),
         summarizer=summarizer,
         round_note=round_note,
+        native_tools=native_tools or None,
+        require_tool_call=require_tool_call or None,
     )
 
 

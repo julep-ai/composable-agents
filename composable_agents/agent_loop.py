@@ -54,6 +54,11 @@ from .validate import Diagnostic
 # Namespaced so an ordinary reasoner's business "note" field never renders
 # as a system instruction (the prompt path opts in on THIS key only).
 ROUND_NOTE_KEY = "__round_note__"
+NATIVE_TOOLS_KEY = "__native_tools__"
+REQUIRE_TOOL_CALL_REASK_MESSAGE = "require_tool_call: reply with a tool call, not text"
+REQUIRE_TOOL_CALL_NEVER_CALLED_REASON = (
+    "require_tool_call: controller never called a tool"
+)
 
 
 def coerce_round_note(note: Any) -> Optional[str]:
@@ -385,6 +390,36 @@ class AgentState:
         )
 
 
+async def blob_round_output_refs(
+    state: AgentState,
+    prev_trace_len: int,
+    blob: Callable[[Any], Awaitable[str]],
+) -> None:
+    """Assign per-entry output_ref blobs to call/sub trace entries recorded this round.
+
+    A CALL_MANY round records several call entries and leaves ``state.last`` as the
+    aligned observation list. Each entry gets its own output blob. Single call/sub
+    rounds record one entry and keep the existing ``state.last`` semantics.
+    """
+    new_entries = [
+        entry
+        for entry in state.trace[prev_trace_len:]
+        if entry.decision in (Decision.CALL.value, Decision.SUB.value)
+    ]
+    if not new_entries:
+        return
+    if len(new_entries) == 1:
+        new_entries[0].output_ref = await blob(state.last)
+        return
+
+    observations = (
+        state.last if isinstance(state.last, list) else [state.last] * len(new_entries)
+    )
+    for entry, obs in zip(new_entries, observations, strict=False):
+        value = obs["output"] if isinstance(obs, dict) and "output" in obs else obs
+        entry.output_ref = await blob(value)
+
+
 def state_fingerprint(state: AgentState) -> str:
     """Stable sha256 hex of the canonical JSON of ``state.to_json()``.
 
@@ -681,6 +716,7 @@ __all__ = [
     "TraceEntry",
     "would_exceed_budget",
     "should_continue_as_new",
+    "blob_round_output_refs",
     "state_fingerprint",
     "terminal_result",
     "CallDenial",
@@ -701,4 +737,6 @@ __all__ = [
     "promote_plan",
     "estimate_cost",
     "PlanRejected",
+    "REQUIRE_TOOL_CALL_REASK_MESSAGE",
+    "REQUIRE_TOOL_CALL_NEVER_CALLED_REASON",
 ]

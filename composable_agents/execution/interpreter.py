@@ -597,6 +597,8 @@ def _app_config(node: Node) -> Optional[dict[str, Any]]:
             "ctx",
             "summarizer",
             "roundNote",
+            "nativeTools",
+            "requireToolCall",
         )
         if key in encoded
     }

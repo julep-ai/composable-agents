@@ -43,6 +43,10 @@ if HAVE_TEMPORAL:
     from composable_agents.execution.harness import (
         run_flow, start_flow, AgentWorkflow, AgentInput, ExecutionPolicy,
     )
+    from composable_agents.agent_loop import (
+        REQUIRE_TOOL_CALL_NEVER_CALLED_REASON,
+        REQUIRE_TOOL_CALL_REASK_MESSAGE,
+    )
     from composable_agents.execution.worker import build_worker, WORKFLOWS, ACTIVITIES
     from composable_agents.execution.activities import (
         WorkerContext, configure,
@@ -847,6 +851,183 @@ async def _agent_trace_fidelity(env):
     assert all("outputRef" not in t for t in res_off["trace"]), res_off
 
 
+async def _agent_require_tool_call_reasks_then_calls(env):
+    agents = {
+        "require_ctrl": {
+            "config": {
+                "requireToolCall": True,
+                "maxRounds": 6,
+                "budget": {"cost": 1000},
+            },
+            "grantedTools": ["srv/double"],
+        }
+    }
+    calls = {"count": 0}
+
+    async def scripted(reasoner, value):  # noqa: ANN001
+        if reasoner.name != "require_ctrl":
+            return await _llm(reasoner, value)
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {"output": "premature text"}
+        if calls["count"] == 2:
+            assert value["input"] == {
+                "error": REQUIRE_TOOL_CALL_REASK_MESSAGE,
+                "reply": "premature text",
+            }
+            assert any(
+                entry["decision"] == "reask"
+                and entry["error"] == REQUIRE_TOOL_CALL_REASK_MESSAGE
+                for entry in value["trace"]
+            )
+            return {"tool": "srv/double", "input": 5}
+        return {"done": True, "output": value["input"]}
+
+    async with _worker(
+        env,
+        task_queue="ca-agent-require-tool-call",
+        agents=agents,
+        llm=scripted,
+        extra_reasoners=(Reasoner(name="require_ctrl", model="test", system="decide"),),
+    ):
+        sid = f"require-tool-call-{uuid.uuid4()}"
+        res = await env.client.execute_workflow(
+            AgentWorkflow.run,
+            AgentInput(
+                controller="require_ctrl",
+                session_id=sid,
+                input={"task": "go"},
+                policy=ExecutionPolicy().to_json(),
+            ),
+            id=sid,
+            task_queue="ca-agent-require-tool-call",
+        )
+
+    assert res["status"] == "done", res
+    assert res["output"] == 10, res
+    reasks = [entry for entry in res["trace"] if entry["decision"] == "reask"]
+    assert reasks == [
+        {
+            "decision": "reask",
+            "cost": 0.0,
+            "error": REQUIRE_TOOL_CALL_REASK_MESSAGE,
+        }
+    ]
+    assert len(res["trace"]) == 2, res
+    call_entry = res["trace"][1]
+    assert call_entry["decision"] == "call"
+    assert call_entry["ref"] == "srv/double"
+    assert "error" not in call_entry
+
+
+async def _agent_require_tool_call_halts(env):
+    agents = {
+        "require_ctrl2": {
+            "config": {
+                "requireToolCall": True,
+                "maxRounds": 6,
+                "budget": {"cost": 1000},
+            },
+            "grantedTools": ["srv/double"],
+        }
+    }
+
+    async def scripted(reasoner, value):  # noqa: ANN001
+        if reasoner.name == "require_ctrl2":
+            return {"output": "text"}
+        return await _llm(reasoner, value)
+
+    async with _worker(
+        env,
+        task_queue="ca-agent-require-tool-call-halt",
+        agents=agents,
+        llm=scripted,
+        extra_reasoners=(Reasoner(name="require_ctrl2", model="test", system="decide"),),
+    ):
+        sid = f"require-tool-call-halt-{uuid.uuid4()}"
+        res = await env.client.execute_workflow(
+            AgentWorkflow.run,
+            AgentInput(
+                controller="require_ctrl2",
+                session_id=sid,
+                input={"task": "go"},
+                policy=ExecutionPolicy().to_json(),
+            ),
+            id=sid,
+            task_queue="ca-agent-require-tool-call-halt",
+        )
+
+    assert res["status"] == "controller_error", res
+    assert res["reason"] == REQUIRE_TOOL_CALL_NEVER_CALLED_REASON
+    reasks = [entry for entry in res["trace"] if entry["decision"] == "reask"]
+    assert len(reasks) == 2, res
+    assert all(entry["error"] == REQUIRE_TOOL_CALL_REASK_MESSAGE for entry in reasks)
+
+
+async def _agent_tool_error_persisted_for_transcript(env):
+    agents = {
+        "err_ctrl": {
+            "config": {"maxRounds": 4, "budget": {"cost": 1000}},
+            "grantedTools": ["srv/fail"],
+        }
+    }
+    blob_store = InMemoryBlobStore()
+    calls = {"count": 0}
+
+    async def scripted(reasoner, value):  # noqa: ANN001
+        if reasoner.name != "err_ctrl":
+            return await _llm(reasoner, value)
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {"tool": "srv/fail", "input": 5}
+        return {"done": True, "output": value["input"]}
+
+    DEFAULT_REGISTRY.register_reasoner(Reasoner(name="err_ctrl", model="test", system="decide"))
+    ctx = WorkerContext(
+        mcp_call=_mcp,
+        llm=scripted,
+        subflows=_child_registry(),
+        agents=agents,
+        blob_store=blob_store,
+    )
+    configure(ctx)
+    worker = Worker(
+        env.client,
+        task_queue="ca-agent-tool-error-blob",
+        workflows=WORKFLOWS,
+        activities=ACTIVITIES,
+    )
+    async with worker:
+        sid = f"agent-tool-error-blob-{uuid.uuid4()}"
+        res = await env.client.execute_workflow(
+            AgentWorkflow.run,
+            AgentInput(
+                controller="err_ctrl",
+                session_id=sid,
+                input={"task": "go"},
+                policy=ExecutionPolicy(
+                    trace_content_refs=True,
+                    idempotent_max_attempts=1,
+                ).to_json(),
+            ),
+            id=sid,
+            task_queue="ca-agent-tool-error-blob",
+        )
+
+    assert res["status"] == "done", res
+    calls_trace = [entry for entry in res["trace"] if entry["decision"] == "call"]
+    assert len(calls_trace) == 1, res
+    call_entry = calls_trace[0]
+    assert call_entry["ref"] == "srv/fail"
+    assert call_entry.get("error")
+    output_ref = call_entry.get("outputRef")
+    assert output_ref, f"call entry missing outputRef: {call_entry}"
+
+    resolved = json.loads(await blob_store.get(sid, output_ref))
+    assert resolved["tool"] == "srv/fail"
+    assert resolved["error"]
+
+
 async def _pure_drift_fails_before_effect(env):
     effects = {"count": 0}
 
@@ -1132,6 +1313,9 @@ async def _run_all():
         await _agent_session_store(env)
         await _agent_session_store_fencing(env)
         await _agent_trace_fidelity(env)
+        await _agent_require_tool_call_reasks_then_calls(env)
+        await _agent_require_tool_call_halts(env)
+        await _agent_tool_error_persisted_for_transcript(env)
         await _pure_drift_fails_before_effect(env)
         await _agent_native_tools_call_many(env)
         await _agent_call_many_tool_error_folds_to_observation(env)

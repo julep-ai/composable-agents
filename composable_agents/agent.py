@@ -25,7 +25,7 @@ from typing import (
     overload,
 )
 
-from .agent_loop import AgentConfig, drive_agent_loop
+from .agent_loop import AgentConfig, NATIVE_TOOLS_KEY, drive_agent_loop
 from .capabilities import Budget, CapabilityManifest, ToolGrant
 from .contracts import ToolContract
 from .deploy import Deployment, deploy
@@ -557,6 +557,8 @@ class Agent(FlowLike[Any, Any]):
             subflows=(list(sub_refs) or None),
             budget=self._budget,
             max_rounds=max_rounds,
+            native_tools=native_tools,
+            require_tool_call=require_tool_call,
         )
         self._snapshot = snapshot_from_tools(self._tools)
         self._capabilities = CapabilityManifest(
@@ -860,7 +862,7 @@ class Agent(FlowLike[Any, Any]):
             # matches the long-documented ``_reasoner_name`` parameter. Scripted
             # callers ignore it, so this is behaviour-preserving for them.
             controller_payload = (
-                {**payload, "tools": native_tool_defs}
+                {**payload, NATIVE_TOOLS_KEY: native_tool_defs}
                 if native_tool_defs is not None
                 else payload
             )
@@ -1059,7 +1061,7 @@ class Agent(FlowLike[Any, Any]):
 
             async def invoke_controller(payload: dict[str, Any]) -> Any:
                 controller_payload = (
-                    {**payload, "tools": native_tool_defs}
+                    {**payload, NATIVE_TOOLS_KEY: native_tool_defs}
                     if native_tool_defs is not None
                     else payload
                 )
