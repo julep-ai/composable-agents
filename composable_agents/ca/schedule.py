@@ -8,15 +8,36 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 from composable_agents.ca.config import CaConfig, EnvConfig, ScheduleConfig
 from composable_agents.ca.ledger import DeployRecord, read_ledger
-from composable_agents.ca.temporal_run import build_flow_start_args, connect_temporal_client
+from composable_agents.ca.temporal_run import (
+    build_flow_input_kwargs,
+    build_flow_start_args,
+    connect_temporal_client,
+)
 
 
 def schedule_id(env: str, name: str) -> str:
     return f"ca:{env}:{name}"
+
+
+# Temporal normalizes cron expressions into a structured calendar spec server-side,
+# so `spec.cron_expressions` reads back empty. We round-trip the desired cron through
+# the schedule note (which, unlike memo, survives BOTH create and update) so drift
+# detection can compare the configured cron against what is actually on the server.
+_NOTE_CRON_PREFIX = "ca-managed cron="
+
+
+def _schedule_note(cron: str) -> str:
+    return f"{_NOTE_CRON_PREFIX}{cron}"
+
+
+def _cron_from_note(note: object) -> str | None:
+    if isinstance(note, str) and note.startswith(_NOTE_CRON_PREFIX):
+        return note[len(_NOTE_CRON_PREFIX):]
+    return None
 
 
 def schedules_for_env(cfg: CaConfig, env_name: str) -> list[ScheduleConfig]:
@@ -101,14 +122,7 @@ def build_schedule(record: DeployRecord, env: EnvConfig, sched: ScheduleConfig) 
     )
 
     sa = build_flow_start_args(record, env, sched.input)
-    flow_input = build_flow_input(
-        session_id=sa.session_id,
-        input=sa.input,
-        flow_json=sa.flow_json,
-        manifest_json=sa.manifest_json,
-        pinned_pures=sa.pinned_pures,
-        bundle=cast("list[dict[str, str]] | None", sa.bundle),
-    )
+    flow_input = build_flow_input(**build_flow_input_kwargs(sa, session_id=sa.session_id))
     action = ScheduleActionStartWorkflow(
         FlowWorkflow.run,
         args=[flow_input],
@@ -117,7 +131,7 @@ def build_schedule(record: DeployRecord, env: EnvConfig, sched: ScheduleConfig) 
     )
     spec = ScheduleSpec(cron_expressions=[sched.cron])
     policy = SchedulePolicy(overlap=ScheduleOverlapPolicy.SKIP)
-    state = ScheduleState(paused=sched.paused)
+    state = ScheduleState(paused=sched.paused, note=_schedule_note(sched.cron))
     return Schedule(action=action, spec=spec, policy=policy, state=state)
 
 
@@ -195,10 +209,9 @@ async def _fetch_server_schedules(client: Any) -> dict[str, dict[str, Any]]:
     async for sched in schedule_iter:
         sid = str(sched.id)
         schedule = getattr(sched, "schedule", None)
-        spec = getattr(schedule, "spec", None)
         state = getattr(schedule, "state", None)
-        cron_expressions = getattr(spec, "cron_expressions", None) or []
-        cron = cron_expressions[0] if cron_expressions else None
+        note = getattr(state, "note", None)
+        cron = _cron_from_note(note)
         rows[sid] = {
             "cron": cron,
             "paused": bool(getattr(state, "paused", False)),

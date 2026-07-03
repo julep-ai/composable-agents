@@ -156,13 +156,25 @@ def _build_schedules(
         if not isinstance(flow, str) or not flow:
             raise ValueError(f"schedule {name!r} requires a 'flow' string")
         validate_cron(cron)
+        env_value = table.get("env", "local")
+        if not isinstance(env_value, str):
+            raise ValueError(
+                f"schedule {name!r} field 'env' must be a string, "
+                f"got {type(env_value).__name__}"
+            )
+        paused_value = table.get("paused", False)
+        if not isinstance(paused_value, bool):
+            raise ValueError(
+                f"schedule {name!r} field 'paused' must be a boolean (true/false), "
+                f"got {type(paused_value).__name__}"
+            )
         schedules[name] = ScheduleConfig(
             name=name,
             cron=cron,
             flow=flow,
             input=table.get("input"),
-            env=str(table.get("env", "local")),
-            paused=bool(table.get("paused", False)),
+            env=env_value,
+            paused=paused_value,
         )
     return schedules
 

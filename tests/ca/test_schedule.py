@@ -154,6 +154,24 @@ def test_missing_cron_or_flow_teaching_error(tmp_path: Path) -> None:
         load_config(tmp_path)
 
 
+def test_paused_non_bool_teaching_error(tmp_path: Path) -> None:
+    (tmp_path / "ca.toml").write_text(
+        '[schedule.x]\ncron = "0 * * * *"\nflow = "f"\npaused = "false"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="'paused' must be a boolean"):
+        load_config(tmp_path)
+
+
+def test_env_non_string_teaching_error(tmp_path: Path) -> None:
+    (tmp_path / "ca.toml").write_text(
+        '[schedule.x]\ncron = "0 * * * *"\nflow = "f"\nenv = 3\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="'env' must be a string"):
+        load_config(tmp_path)
+
+
 def test_schedule_id_shape() -> None:
     assert schedule_id("prod", "hourly") == "ca:prod:hourly"
 
@@ -264,6 +282,7 @@ def test_apply_creates_then_updates_via_fake_client(tmp_path: Path) -> None:
     assert obj.spec.cron_expressions == [sched.cron]
     assert obj.policy.overlap == ScheduleOverlapPolicy.SKIP
     assert obj.state.paused is True
+    assert obj.state.note == "ca-managed cron=0 * * * *"
     flow_input = obj.action.args[0]
     assert flow_input.flow_json == record.flow_json
     assert flow_input.pinned_pures == record.pinned_pures
@@ -281,10 +300,11 @@ def test_apply_creates_then_updates_via_fake_client(tmp_path: Path) -> None:
 
 def test_fetch_server_schedules_fake_client() -> None:
     class _Spec:
-        cron_expressions = ["0 * * * *"]
+        cron_expressions: list[str] = []
 
     class _State:
         paused = True
+        note = "ca-managed cron=0 * * * *"
 
     class _Sched:
         spec = _Spec()
@@ -320,6 +340,53 @@ def test_fetch_server_schedules_fake_client() -> None:
 
     assert fake.listed == 1
     assert server == {"ca:staging:hourly": {"cron": "0 * * * *", "paused": True}}
+
+
+def test_drift_in_sync_when_server_cron_normalized_to_calendars() -> None:
+    """Regression: Temporal returns cron as calendars + empty cron_expressions; the
+    note carries the real cron so a just-applied schedule reads as in-sync, not drift."""
+
+    class _Spec:
+        cron_expressions: list[str] = []
+        calendars = [object()]
+
+    class _State:
+        paused = False
+        note = "ca-managed cron=0 * * * *"
+
+    class _Sched:
+        spec = _Spec()
+        state = _State()
+
+    class _Row:
+        def __init__(self, sid: str, schedule: Any) -> None:
+            self.id = sid
+            self.schedule = schedule
+
+    class _AsyncIter:
+        def __init__(self, rows: list[Any]) -> None:
+            self._rows = list(rows)
+
+        def __aiter__(self) -> "_AsyncIter":
+            return self
+
+        async def __anext__(self) -> Any:
+            if not self._rows:
+                raise StopAsyncIteration
+            return self._rows.pop(0)
+
+    class _FakeClient:
+        async def list_schedules(self) -> Any:
+            return _AsyncIter([_Row("ca:staging:hourly-rollup", _Sched())])
+
+    server = fetch_server_schedules(EnvConfig(name="staging"), client=_FakeClient())
+    assert server == {"ca:staging:hourly-rollup": {"cron": "0 * * * *", "paused": False}}
+
+    configured = [
+        ScheduleConfig(name="hourly-rollup", cron="0 * * * *", flow="f", env="staging")
+    ]
+    rows = schedule_drift("staging", configured, server)
+    assert [(r.name, r.state) for r in rows] == [("hourly-rollup", "in-sync")]
 
 
 @pytest.mark.skipif(not HAVE_TEMPORAL, reason="temporalio not installed")
@@ -365,8 +432,6 @@ def test_remove_schedule_fake_client() -> None:
 
 @pytest.mark.skipif(not HAVE_TEMPORAL, reason="temporalio not installed")
 def test_builder_equivalence_schedule_matches_run(tmp_path: Path) -> None:
-    from composable_agents.execution.harness import build_flow_input
-
     cfg = _cloud_cfg(tmp_path)
     env = cfg.envs["staging"]
     record = _deploy_record(tmp_path, agent="rollups.hourly")
@@ -380,30 +445,25 @@ def test_builder_equivalence_schedule_matches_run(tmp_path: Path) -> None:
 
     obj = build_schedule(record, env, sched)
     sched_fi = obj.action.args[0]
-    captured: dict[str, Any] = {}
 
-    def _spy_run_flow(client: Any, flow_json: Any, manifest_json: Any, **kwargs: Any) -> Any:
-        captured["flow_json"] = flow_json
-        captured["manifest_json"] = manifest_json
-        captured.update(kwargs)
-        return {"ok": True}
+    class _CapClient:
+        def __init__(self) -> None:
+            self.captured: Any = None
 
-    run_on_env(
-        cfg,
-        record.agent,
-        env,
-        sched.input,
-        client=object(),
-        run_flow=_spy_run_flow,
-    )
-    run_fi = build_flow_input(
-        session_id=captured["session_id"],
-        input=captured["input"],
-        flow_json=captured["flow_json"],
-        manifest_json=captured["manifest_json"],
-        pinned_pures=captured["pinned_pures"],
-        bundle=captured["bundle"],
-    )
+        async def execute_workflow(
+            self,
+            workflow: Any,
+            arg: Any,
+            *,
+            id: str,
+            task_queue: str,
+        ) -> Any:
+            self.captured = arg
+            return {"ok": True}
+
+    cap = _CapClient()
+    run_on_env(cfg, record.agent, env, sched.input, client=cap)
+    run_fi = cap.captured
 
     def canon(value: Any) -> str:
         normalized = replace(value, session_id="X")
@@ -436,14 +496,15 @@ def test_apply_ls_rm_integration(tmp_path: Path) -> None:
 
         apply_schedules(cfg, env, [sched], client=env_ws.client)
         handle = env_ws.client.get_schedule_handle(schedule_id(env.name, sched.name))
-        description = asyncio.run(asyncio.wait_for(handle.describe(), timeout=10))
+        asyncio.run(asyncio.wait_for(handle.describe(), timeout=10))
 
-        assert description.schedule.spec.cron_expressions == [sched.cron] or (
-            description.schedule.spec.calendars
-        )
         server = fetch_server_schedules(env, client=env_ws.client)
-        assert schedule_id(env.name, sched.name) in server
-        assert server[schedule_id(env.name, sched.name)]["paused"] is False
+        sid = schedule_id(env.name, sched.name)
+        assert sid in server
+        assert server[sid]["paused"] is False
+        assert server[sid]["cron"] == sched.cron
+        rows = schedule_drift(env.name, [sched], server)
+        assert [(r.name, r.state) for r in rows] == [(sched.name, "in-sync")]
 
         assert remove_schedule(env, sched.name, client=env_ws.client) is True
         with pytest.raises(RPCError) as excinfo:

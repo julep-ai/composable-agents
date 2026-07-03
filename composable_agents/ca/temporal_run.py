@@ -15,6 +15,7 @@ from composable_agents.ca.runner import run_agent_local
 
 __all__ = [
     "FlowStartArgs",
+    "build_flow_input_kwargs",
     "build_flow_start_args",
     "connect_temporal_client",
     "run_on_env",
@@ -50,6 +51,24 @@ def build_flow_start_args(record: DeployRecord, env: EnvConfig, input: Any) -> F
         bundle=record.bundle_ref,
         pinned_pures=record.pinned_pures or None,
     )
+
+
+def build_flow_input_kwargs(sa: FlowStartArgs, *, session_id: str) -> dict[str, Any]:
+    """The ONE mapping from start-args to FlowInput construction kwargs.
+
+    Both the deployed-run seam (``run_on_env`` -> ``run_flow``) and ``ca schedule``
+    (``build_schedule`` -> ``build_flow_input``) construct their FlowInput from this
+    single dict, so any field added here reaches BOTH paths. ``task_queue`` is NOT
+    included: it is a workflow-start parameter, not a FlowInput field.
+    """
+    return {
+        "session_id": session_id,
+        "input": sa.input,
+        "flow_json": sa.flow_json,
+        "manifest_json": sa.manifest_json,
+        "pinned_pures": sa.pinned_pures,
+        "bundle": sa.bundle,
+    }
 
 
 def run_on_env(
@@ -93,13 +112,8 @@ def run_on_env(
     sa = build_flow_start_args(record, env, value)
     result = run_flow_callable(
         temporal_client,
-        sa.flow_json,
-        sa.manifest_json,
-        session_id=session_id,
-        input=sa.input,
         task_queue=sa.task_queue,
-        bundle=sa.bundle,
-        pinned_pures=sa.pinned_pures,
+        **build_flow_input_kwargs(sa, session_id=session_id),
     )
     return _await_if_needed(result)
 
