@@ -39,6 +39,11 @@ def queue_lane_diagnostics(
                 candidates.add(name)
 
     def walk(node: Any) -> None:
+        node_queues = getattr(node, "subflow_queues", None)
+        if isinstance(node_queues, dict):
+            for name in node_queues.values():
+                if isinstance(name, str) and name:
+                    candidates.add(name)
         step = getattr(node, "step", None)
         if isinstance(step, SubStep):
             queue = getattr(step.contract, "queue", None)

@@ -14,6 +14,7 @@ from composable_agents.ca.ledger import DeployRecord, read_ledger, upsert_record
 from composable_agents.ca.lint import lint_agents
 from composable_agents.ca.queues import queue_lane_diagnostics, resolve_queue_lane
 from composable_agents.ca.temporal_run import build_flow_start_args, run_on_env
+from composable_agents.dsl import app
 from composable_agents.execution.interpreter import _app_config
 from composable_agents.execution.harness import (
     AgentInput,
@@ -387,6 +388,22 @@ def test_queue_lane_diagnostics_for_agent_and_ir_subcontracts() -> None:
     )
     ir_diags = queue_lane_diagnostics(ir_found, {"foreground": "prod-fg"}, "prod")
     assert [diag["code"] for diag in ir_diags] == ["QUEUE_UNKNOWN_LANE"]
+
+
+def test_queue_lane_diagnostics_catches_app_node_subflow_queues() -> None:
+    ctrl = as_flow(app("ctrl", subflows=["child"], subflow_queues={"child": "typo"}))
+
+    diagnostics = queue_lane_diagnostics(ctrl, {"foreground": "prod-fg"}, "prod")
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["code"] == "QUEUE_UNKNOWN_LANE"
+    assert diagnostics[0]["severity"] == "error"
+    assert "foreground" in diagnostics[0]["message"]
+
+    configured = as_flow(
+        app("ctrl", subflows=["child"], subflow_queues={"child": "foreground"})
+    )
+    assert queue_lane_diagnostics(configured, {"foreground": "prod-fg"}, "prod") == []
+    assert queue_lane_diagnostics(ctrl, {}, "prod") == []
 
 
 def test_resolve_agent_spec_subflow_queues_passthrough() -> None:
