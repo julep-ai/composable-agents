@@ -2152,6 +2152,13 @@ class AgentWorkflow:
                 start_to_close_timeout=timedelta(seconds=policy.reasoner_timeout_s),
                 retry_policy=_reasoner_retry(policy),
             )
+            if isinstance(reply, dict) and "__ca_meta__" in reply and "reply" in reply:
+                meta = reply["__ca_meta__"]
+                state.controller_meta = (
+                    dict(meta) if isinstance(meta, dict) else {"meta": meta}
+                )
+            else:
+                state.controller_meta = None
             new_summary, reply = split_summary_reply(reply)
             reply = unwrap_reply_meta(reply)
             if new_summary is not None:
