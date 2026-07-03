@@ -318,7 +318,12 @@ def lint(
     floor = fail_severity.value if fail_severity is not None else cfg.fail_severity
     # lint has no --env; the implicit local profile is the deterministic default.
     findings, code = lint_agents(
-        cfg, names, fail_severity=floor, env_vars=cfg.envs["local"].vars
+        cfg,
+        names,
+        fail_severity=floor,
+        env_vars=cfg.envs["local"].vars,
+        queues=cfg.envs["local"].queues,
+        queue_env="local",
     )
     for f in findings:
         typer.echo(f"{f.severity.upper():7} {f.agent}: {f.code} — {f.message}")

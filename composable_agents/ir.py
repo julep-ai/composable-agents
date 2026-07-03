@@ -286,11 +286,14 @@ class SubContract:
 
     shape: Shape
     summary_policy: Optional[SummaryPolicy] = None
+    queue: Optional[str] = None
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {"shape": self.shape.value}
         if self.summary_policy is not None:
             out["summaryPolicy"] = self.summary_policy.value
+        if self.queue is not None:
+            out["queue"] = self.queue
         return out
 
     @staticmethod
@@ -300,6 +303,7 @@ class SubContract:
             summary_policy=(
                 SummaryPolicy(d["summaryPolicy"]) if d.get("summaryPolicy") else None
             ),
+            queue=d.get("queue"),
         )
 
 

@@ -158,6 +158,9 @@ def _freeze_agent(
         "bundle_ref": dep.bundle_ref,
         "pinned_pures": pinned_pures,
     }
+    dep_queue = getattr(dep, "queue", None)
+    if dep_queue is not None:
+        result["queue"] = dep_queue
     if not publish:
         # Read-only path (`ca status`): the artifact_hash is a cached_property of
         # artifact_components and needs no CAS mutation / S3 upload to compute.
@@ -213,6 +216,7 @@ def main() -> int:
         return 0
 
     if action == "lint":
+        from composable_agents.ca.queues import queue_lane_diagnostics
         from composable_agents.validate import validate
 
         result = _discover_agent(root, src, target)
@@ -220,12 +224,18 @@ def main() -> int:
             _emit({"error": _not_found_error(target, result.import_errors)})
             return 0
         diagnostics = validate(result.found.to_ir())
+        extra = queue_lane_diagnostics(
+            result.found,
+            payload.get("queues") or {},
+            str(payload.get("queue_env") or "local"),
+        )
         _emit(
             {
                 "diagnostics": [
                     {"code": d.code, "severity": d.severity, "message": d.message}
                     for d in diagnostics
                 ]
+                + extra
             }
         )
         return 0

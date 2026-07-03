@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from composable_agents.ca.queues import resolve_queue_lane as resolve_queue_lane
+
 if sys.version_info >= (3, 11):
     import tomllib as _tomllib
 else:
@@ -25,6 +27,7 @@ class EnvConfig:
     # [env.<name>.vars]: the env profile bound as the dotctx yglu default env
     # inside the resolver/freeze child (never the ambient process environment).
     vars: dict[str, str] = field(default_factory=dict)
+    queues: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -96,6 +99,15 @@ def _env_vars(table: object) -> dict[str, str]:
     return {str(key): str(value) for key, value in raw.items()}
 
 
+def _env_queues(table: object) -> dict[str, str]:
+    if not isinstance(table, dict):
+        return {}
+    raw = table.get('queues')
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): str(value) for key, value in raw.items()}
+
+
 def _build_envs(
     root: Path,
     pyproject_envs: object,
@@ -103,6 +115,7 @@ def _build_envs(
 ) -> dict[str, EnvConfig]:
     env_tables: dict[str, dict[str, str | None]] = {}
     env_vars: dict[str, dict[str, str]] = {}
+    env_queues: dict[str, dict[str, str]] = {}
     for raw_envs in (pyproject_envs, ca_toml_envs):
         if not isinstance(raw_envs, dict):
             continue
@@ -111,6 +124,7 @@ def _build_envs(
             env_tables.setdefault(env_name, {}).update(_env_fields(table))
             # vars merge per-key, ca.toml over pyproject (scalar-field order).
             env_vars.setdefault(env_name, {}).update(_env_vars(table))
+            env_queues.setdefault(env_name, {}).update(_env_queues(table))
 
     local_defaults: dict[str, str | None] = {
         'cas': str(root / '.ca' / 'cas'),
@@ -127,6 +141,7 @@ def _build_envs(
             cas=fields.get('cas'),
             langfuse_host=fields.get('langfuse_host'),
             vars=env_vars.get(name, {}),
+            queues=env_queues.get(name, {}),
         )
         for name, fields in env_tables.items()
     }

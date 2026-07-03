@@ -1281,6 +1281,19 @@ class Agent(FlowLike[Any, Any]):
         """The per-component split children (ref -> marker)."""
         return dict(self._split_children)
 
+    def subflow_queues(self) -> dict[str, str]:
+        """Per-subflow lane names authored via ``child.as_sub(queue=...)``.
+
+        Omit-when-unset: children without a queue are absent. This is the piece a
+        worker-spec builder puts under ``agents[controller]["subflowQueues"]`` so a
+        durable AgentWorkflow can route SUB decisions to lanes.
+        """
+        queues: dict[str, str] = {}
+        for ref, cap in self._split_children.items():
+            if cap.queue is not None:
+                queues[ref] = cap.queue
+        return queues
+
     def sub_deployments(self) -> dict[str, "Deployment"]:
         """Compiled child deployments for this agent's sub-capabilities (ref -> Deployment).
 

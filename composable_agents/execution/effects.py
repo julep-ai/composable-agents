@@ -114,7 +114,7 @@ class WorkerContext:
     # worker startup, so the resolve* activities below read them deterministically.
     # ref -> {flowJson, manifestJson, pureSourceHashes?, bundle?}
     subflows: dict[str, dict[str, Any]] = field(default_factory=dict)
-    # controller -> {config, grantedTools, grantedContracts, grantedSubflows}
+    # controller -> {config, grantedTools, grantedContracts, grantedSubflows, subflowQueues}
     agents: dict[str, dict[str, Any]] = field(default_factory=dict)
     trajectory_sink: Optional[TrajectorySink] = None
     trajectory_blob_store: Optional[BlobStore] = None
@@ -1188,6 +1188,7 @@ async def resolveAgentSpec(controller: str) -> dict[str, Any]:
         granted_subflows = sorted(_CTX.capabilities.subflows)
     else:
         granted_subflows = None
+    subflow_queues = spec.get("subflowQueues")
     capability_subflows = (
         sorted(_CTX.capabilities.subflows)
         if _CTX.capabilities is not None and _CTX.capabilities._has_subflows
@@ -1200,6 +1201,7 @@ async def resolveAgentSpec(controller: str) -> dict[str, Any]:
         "capabilityTools": None if capability_tools is None else list(capability_tools),
         "grantedContracts": contracts,
         "grantedSubflows": None if granted_subflows is None else list(granted_subflows),
+        "subflowQueues": None if subflow_queues is None else dict(subflow_queues),
         "capabilitySubflows": None if capability_subflows is None else list(capability_subflows),
         "toolDefs": tool_defs,
     }

@@ -11,6 +11,7 @@ from typing import Any
 
 from composable_agents.ca.config import CaConfig, EnvConfig
 from composable_agents.ca.ledger import DeployRecord, read_ledger
+from composable_agents.ca.queues import resolve_queue_lane
 from composable_agents.ca.runner import run_agent_local
 
 __all__ = [
@@ -31,6 +32,7 @@ class FlowStartArgs:
     task_queue: str
     bundle: list[dict[str, Any]] | None
     pinned_pures: dict[str, str] | None
+    queue_lanes: dict[str, str] | None = None
 
 
 def build_flow_start_args(record: DeployRecord, env: EnvConfig, input: Any) -> FlowStartArgs:
@@ -47,9 +49,10 @@ def build_flow_start_args(record: DeployRecord, env: EnvConfig, input: Any) -> F
         manifest_json=record.manifest_json,
         session_id=f"ca:{env.name}:{record.agent}",
         input=input,
-        task_queue=env.task_queue,
+        task_queue=resolve_queue_lane(record.queue, env.queues, env.task_queue),
         bundle=record.bundle_ref,
         pinned_pures=record.pinned_pures or None,
+        queue_lanes=(env.queues or None),
     )
 
 
@@ -68,6 +71,7 @@ def build_flow_input_kwargs(sa: FlowStartArgs, *, session_id: str) -> dict[str, 
         "manifest_json": sa.manifest_json,
         "pinned_pures": sa.pinned_pures,
         "bundle": sa.bundle,
+        "queue_lanes": sa.queue_lanes,
     }
 
 

@@ -2,6 +2,11 @@
 
 The 24 APScheduler jobs become `[schedule.*]` tables; SQL-trigger enqueues
 (summary) stay app-side ingress, out of scope.
+
+Queue lanes are deployment topology, not artifact identity: real mem-mcp role
+lanes map to one worker Deployment + KEDA ScaledObject per lane. Interactive
+(RECORD plan/execute, checkin/recall) vs background (sweeps, rollups,
+clustering, dream) is the two-lane starter, not the ceiling.
 """
 
 from __future__ import annotations
@@ -111,7 +116,10 @@ def schedule_drift(
 
 
 def build_schedule(record: DeployRecord, env: EnvConfig, sched: ScheduleConfig) -> Any:
-    from composable_agents.execution.harness import FlowWorkflow, build_flow_input
+    from composable_agents.execution.harness import (
+        FlowWorkflow,
+        build_flow_input,
+    )
     from temporalio.client import (
         Schedule,
         ScheduleActionStartWorkflow,

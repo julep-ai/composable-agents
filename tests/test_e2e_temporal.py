@@ -136,6 +136,21 @@ async def _pipeline_and_reasoner(env):
     assert out == 20, f"pipeline+reasoner expected 20, got {out}"
 
 
+async def _queue_lanes_do_not_break_subflow_inheritance(env):
+    fr = freeze(sub("child", Contract.pipeline()), _snapshot())
+    async with _worker(env, task_queue="ca-queue-lanes"):
+        out = await run_flow(
+            env.client,
+            fr.flow.to_json(),
+            manifest_to_json(fr.manifest),
+            session_id=f"queue-lanes-{uuid.uuid4()}",
+            input=5,
+            task_queue="ca-queue-lanes",
+            queue_lanes={"foreground": "ca-fg"},
+        )
+    assert out == 6, f"queue-lane subflow expected 6, got {out}"
+
+
 async def _principal_threading(env):
     """Dispatch-supplied principal reaches a new-style MCP caller end-to-end."""
     seen = {}
@@ -1384,6 +1399,7 @@ async def _agent_native_tools_without_tool_defs_fails(env):
 async def _run_all():
     async with await WorkflowEnvironment.start_time_skipping() as env:
         await _pipeline_and_reasoner(env)
+        await _queue_lanes_do_not_break_subflow_inheritance(env)
         await _principal_threading(env)
         await _race(env)
         await _human_gate(env)
