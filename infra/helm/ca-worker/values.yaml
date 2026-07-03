@@ -12,6 +12,8 @@ worker:
   gracefulShutdownSeconds: 20
   healthPort: 8080
   secretName: llm-keys
+  buildId: ""
+  useWorkerVersioning: false
 
 scaling:
   minReplicas: 0

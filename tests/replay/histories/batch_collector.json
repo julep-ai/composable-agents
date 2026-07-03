@@ -1,0 +1,209 @@
+{
+  "events": [
+    {
+      "eventId": "1",
+      "eventTime": "2026-07-03T04:10:09.846Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+      "workflowExecutionStartedEventAttributes": {
+        "workflowType": {
+          "name": "BatchCollector"
+        },
+        "taskQueue": {
+          "name": "corpus-batch"
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJiYXRjaF9zZXEiOjAsImtleSI6ImJhdGNoOmNvcnB1c2Zha2U6QkFUQ0g6IiwibWF4X2l0ZW1zIjoxLCJtYXhfd2FpdF9zIjo2MDAsInBlbmRpbmciOltdLCJwZW5kaW5nX2ZpcnN0X2F0IjpudWxsLCJwZW5kaW5nX2xhc3RfYXQiOm51bGwsInByaW5jaXBhbCI6bnVsbCwicHJvdmlkZXIiOiJjb3JwdXNmYWtlIiwicW9zIjoiQkFUQ0giLCJxdWlldF9zIjo2MDAsInRhc2tfcXVldWUiOiJjb3JwdXMtYmF0Y2gifQ=="
+            }
+          ]
+        },
+        "workflowExecutionTimeout": "315360000s",
+        "workflowRunTimeout": "315360000s",
+        "workflowTaskTimeout": "10s",
+        "originalExecutionRunId": "273f83c7-f8ec-47b2-8d6c-5803b74f7040",
+        "identity": "1564768@Apollo-11",
+        "firstExecutionRunId": "273f83c7-f8ec-47b2-8d6c-5803b74f7040",
+        "attempt": 1,
+        "firstWorkflowTaskBackoff": "0s"
+      }
+    },
+    {
+      "eventId": "2",
+      "eventTime": "2026-07-03T04:10:09.846Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "corpus-batch"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "3",
+      "eventTime": "2026-07-03T04:10:09.846Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED",
+      "workflowExecutionSignaledEventAttributes": {
+        "signalName": "submit",
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJjaWQiOiJ0aGlua0AxIiwiY3VzdG9tX2lkIjoiY29ycHVzLXJlY2VpdmVyLTAtdGhpbmstMS00ZDZhNTc0ZTQxNzg2MTllIiwicHJpbmNpcGFsIjpudWxsLCJyZWFzb25lciI6ImNvcnB1c19lY2hvIiwicmVwbHlfdG8iOiJjb3JwdXMtcmVjZWl2ZXIiLCJ0cmFuc2NyaXB0IjpudWxsLCJ2YWx1ZSI6N30="
+            }
+          ]
+        },
+        "identity": "1564768@Apollo-11"
+      }
+    },
+    {
+      "eventId": "4",
+      "eventTime": "2026-07-03T04:10:09.846Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "2",
+        "identity": "1564768@Apollo-11",
+        "historySizeBytes": "742"
+      }
+    },
+    {
+      "eventId": "5",
+      "eventTime": "2026-07-03T04:10:09.850Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "2",
+        "identity": "1564768@Apollo-11",
+        "binaryChecksum": "64a63d1bceb1e19ce9da9b279be077c5",
+        "sdkMetadata": {
+          "coreUsedFlags": [
+            3,
+            2,
+            1
+          ],
+          "sdkName": "temporal-python",
+          "sdkVersion": "1.30.0"
+        },
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "6",
+      "eventTime": "2026-07-03T04:10:09.850Z",
+      "eventType": "EVENT_TYPE_START_CHILD_WORKFLOW_EXECUTION_INITIATED",
+      "startChildWorkflowExecutionInitiatedEventAttributes": {
+        "namespace": "default",
+        "workflowId": "batch:corpusfake:BATCH::p0:273f83c7-f8ec-47b2-8d6c-5803b74f7040",
+        "workflowType": {
+          "name": "BatchPoll"
+        },
+        "taskQueue": {
+          "name": "corpus-batch",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJiYXRjaF9pZCI6bnVsbCwiY2FsbHMiOlt7ImNpZCI6InRoaW5rQDEiLCJjdXN0b21faWQiOiJjb3JwdXMtcmVjZWl2ZXItMC10aGluay0xLTRkNmE1NzRlNDE3ODYxOWUiLCJwcmluY2lwYWwiOm51bGwsInJlYXNvbmVyIjoiY29ycHVzX2VjaG8iLCJyZXBseV90byI6ImNvcnB1cy1yZWNlaXZlciIsInRyYW5zY3JpcHQiOm51bGwsInZhbHVlIjo3fV0sInByaW5jaXBhbCI6bnVsbCwicHJvdmlkZXIiOiJjb3JwdXNmYWtlIiwicW9zIjoiQkFUQ0giLCJ0YXNrX3F1ZXVlIjoiY29ycHVzLWJhdGNoIn0="
+            }
+          ]
+        },
+        "workflowExecutionTimeout": "0s",
+        "workflowRunTimeout": "0s",
+        "workflowTaskTimeout": "10s",
+        "parentClosePolicy": "PARENT_CLOSE_POLICY_ABANDON",
+        "workflowTaskCompletedEventId": "4",
+        "workflowIdReusePolicy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+        "header": {},
+        "memo": {},
+        "priority": {}
+      }
+    },
+    {
+      "eventId": "7",
+      "eventTime": "2026-07-03T04:10:09.851Z",
+      "eventType": "EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_STARTED",
+      "childWorkflowExecutionStartedEventAttributes": {
+        "namespace": "default",
+        "initiatedEventId": "6",
+        "workflowExecution": {
+          "workflowId": "batch:corpusfake:BATCH::p0:273f83c7-f8ec-47b2-8d6c-5803b74f7040",
+          "runId": "4fd4c23f-a547-4b06-8760-606ee6b7edc2"
+        },
+        "workflowType": {
+          "name": "BatchPoll"
+        }
+      }
+    },
+    {
+      "eventId": "8",
+      "eventTime": "2026-07-03T04:10:09.851Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "corpus-batch"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "9",
+      "eventTime": "2026-07-03T04:10:09.851Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "8",
+        "identity": "1564768@Apollo-11",
+        "historySizeBytes": "1554"
+      }
+    },
+    {
+      "eventId": "10",
+      "eventTime": "2026-07-03T04:10:09.855Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "8",
+        "identity": "1564768@Apollo-11",
+        "binaryChecksum": "64a63d1bceb1e19ce9da9b279be077c5",
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "11",
+      "eventTime": "2026-07-03T04:10:09.855Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_CONTINUED_AS_NEW",
+      "workflowExecutionContinuedAsNewEventAttributes": {
+        "newExecutionRunId": "a906c45d-b1e1-47bd-8596-6d55b3ee30a5",
+        "workflowType": {
+          "name": "BatchCollector"
+        },
+        "taskQueue": {
+          "name": "corpus-batch"
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJiYXRjaF9zZXEiOjEsImtleSI6ImJhdGNoOmNvcnB1c2Zha2U6QkFUQ0g6IiwibWF4X2l0ZW1zIjoxLCJtYXhfd2FpdF9zIjo2MDAuMCwicGVuZGluZyI6W10sInBlbmRpbmdfZmlyc3RfYXQiOm51bGwsInBlbmRpbmdfbGFzdF9hdCI6bnVsbCwicHJpbmNpcGFsIjpudWxsLCJwcm92aWRlciI6ImNvcnB1c2Zha2UiLCJxb3MiOiJCQVRDSCIsInF1aWV0X3MiOjYwMC4wLCJ0YXNrX3F1ZXVlIjoiY29ycHVzLWJhdGNoIn0="
+            }
+          ]
+        },
+        "workflowRunTimeout": "315360000s",
+        "workflowTaskTimeout": "10s",
+        "workflowTaskCompletedEventId": "9",
+        "backoffStartInterval": "0s"
+      }
+    }
+  ]
+}

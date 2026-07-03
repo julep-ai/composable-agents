@@ -33,6 +33,7 @@ import signal
 from dataclasses import dataclass
 from datetime import timedelta
 from importlib import import_module
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Callable, Mapping, Optional
 
 from ..errors import ComposableAgentsError
@@ -78,6 +79,13 @@ def _env_float(env: Mapping[str, str], name: str, default: float) -> float:
         raise ValueError(f"{name} must be a number, got {raw!r}") from exc
 
 
+def _package_version() -> str:
+    try:
+        return version("composable-agents")
+    except PackageNotFoundError:
+        return "0.0.0+unknown"
+
+
 @dataclass(frozen=True)
 class WorkerServeSettings:
     """Environment-shaped configuration for one worker replica.
@@ -99,6 +107,8 @@ class WorkerServeSettings:
     max_concurrent_activities: Optional[int] = None
     max_concurrent_workflow_tasks: Optional[int] = None
     health_port: Optional[int] = None
+    build_id: Optional[str] = None
+    use_worker_versioning: bool = False
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "WorkerServeSettings":
@@ -108,7 +118,8 @@ class WorkerServeSettings:
         ``TEMPORAL_NAMESPACE``, ``TEMPORAL_TASK_QUEUE``, ``TEMPORAL_API_KEY``,
         ``TEMPORAL_TLS``, ``WORKER_GRACEFUL_SHUTDOWN_S``,
         ``WORKER_MAX_CONCURRENT_ACTIVITIES``,
-        ``WORKER_MAX_CONCURRENT_WORKFLOW_TASKS``, ``WORKER_HEALTH_PORT``.
+        ``WORKER_MAX_CONCURRENT_WORKFLOW_TASKS``, ``WORKER_HEALTH_PORT``,
+        ``CA_WORKER_BUILD_ID``, ``CA_WORKER_VERSIONING``.
         """
         e: Mapping[str, str] = os.environ if env is None else env
         factory = e.get("WORKER_CONTEXT_FACTORY")
@@ -130,7 +141,31 @@ class WorkerServeSettings:
             max_concurrent_activities=_env_int(e, "WORKER_MAX_CONCURRENT_ACTIVITIES"),
             max_concurrent_workflow_tasks=_env_int(e, "WORKER_MAX_CONCURRENT_WORKFLOW_TASKS"),
             health_port=_env_int(e, "WORKER_HEALTH_PORT"),
+            build_id=e.get("CA_WORKER_BUILD_ID") or None,
+            use_worker_versioning=_env_bool(e, "CA_WORKER_VERSIONING", default=False),
         )
+
+
+def _versioning_worker_kwargs(settings: WorkerServeSettings) -> dict[str, Any]:
+    """Assemble the opt-in Build-ID / worker-versioning kwargs for build_worker.
+
+    DELIBERATE deprecated-kwarg use: temporalio 1.30 deprecates `build_id` /
+    `use_worker_versioning` on Worker in favor of `deployment_config`. The stable
+    contract we ship is the CA_WORKER_* env seam (parsed into WorkerServeSettings);
+    the Worker kwarg can migrate to deployment_config later without touching that seam.
+    Omit-when-unset: versioning off + no build_id -> {} so build_worker is called
+    byte-identically to before this task. When versioning is on, build_id is required
+    by Worker, so it defaults to the package version.
+    """
+    kwargs: dict[str, Any] = {}
+    build_id = settings.build_id
+    if settings.use_worker_versioning and build_id is None:
+        build_id = _package_version()
+    if build_id is not None:
+        kwargs["build_id"] = build_id
+    if settings.use_worker_versioning:
+        kwargs["use_worker_versioning"] = True
+    return kwargs
 
 
 def load_context_factory(spec: str) -> Callable[[], Any]:
@@ -297,6 +332,7 @@ async def serve(
             worker_kwargs["max_concurrent_workflow_tasks"] = (
                 settings.max_concurrent_workflow_tasks
             )
+        worker_kwargs.update(_versioning_worker_kwargs(settings))
         worker = build_worker(
             client, context, task_queue=settings.task_queue, **worker_kwargs
         )
