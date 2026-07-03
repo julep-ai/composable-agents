@@ -845,6 +845,7 @@ class _TemporalEnv:
         granted_tools: Optional[list[str]] = None
         granted_subflows: Optional[list[str]] = None
         granted_contracts: Optional[dict[str, dict[str, Any]]] = None
+        subflow_queues: Optional[dict[str, str]] = None
         granted_tools_unconstrained = False
 
         if app_config is not None:
@@ -868,6 +869,8 @@ class _TemporalEnv:
             granted_tools = None if tools is None else list(tools)
             subflows = app_config.get("subflows") if "subflows" in app_config else None
             granted_subflows = None if subflows is None else list(subflows)
+            if "subflowQueues" in app_config:
+                subflow_queues = app_config["subflowQueues"]
             if tools is not None:
                 granted_contracts = al.manifest_contracts_for_agent(
                     self.manifest,
@@ -895,6 +898,7 @@ class _TemporalEnv:
                 granted_tools_unconstrained=granted_tools_unconstrained,
                 granted_subflows=granted_subflows,
                 granted_contracts=granted_contracts,
+                subflow_queues=subflow_queues,
                 state=state_json,
                 policy=self._policy.to_json(),
                 principal=self.principal,

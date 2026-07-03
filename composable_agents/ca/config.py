@@ -46,6 +46,9 @@ class CaConfig:
     src: list[str] = field(default_factory=list)
     exclude: list[str] = field(default_factory=list)
     tags: dict[str, list[str]] = field(default_factory=dict)
+    # Discovered flow/agent name -> lane name. Resolved through [env.<env>.queues]
+    # at run/start time; distinct from EnvConfig.queues (lane -> concrete queue).
+    flow_queues: dict[str, str] = field(default_factory=dict)
     fail_severity: str = 'error'
     envs: dict[str, EnvConfig] = field(default_factory=dict)
     schedules: dict[str, ScheduleConfig] = field(default_factory=dict)
@@ -106,6 +109,15 @@ def _env_queues(table: object) -> dict[str, str]:
     if not isinstance(raw, dict):
         return {}
     return {str(key): str(value) for key, value in raw.items()}
+
+
+def _flow_queues(pyproject_queue: object, ca_toml_queue: object) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for raw in (pyproject_queue, ca_toml_queue):
+        if isinstance(raw, dict):
+            for key, value in raw.items():
+                out[str(key)] = str(value)
+    return out
 
 
 def _build_envs(
@@ -206,6 +218,7 @@ def load_config(root: str | Path) -> CaConfig:
         src=list(merged.get('src', [str(root)])),
         exclude=list(merged.get('exclude', [])),
         tags={k: list(v) for k, v in merged.get('tags', {}).items()},
+        flow_queues=_flow_queues(pyproject.get('queue', {}), ca_toml.get('queue', {})),
         fail_severity=str(gates.get('fail_severity', 'error')),
         envs=_build_envs(root, pyproject.get('env', {}), ca_toml.get('env', {})),
         schedules=_build_schedules(pyproject.get("schedule", {}), ca_toml.get("schedule", {})),

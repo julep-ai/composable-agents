@@ -559,6 +559,7 @@ class Agent(FlowLike[Any, Any]):
             max_rounds=max_rounds,
             native_tools=native_tools,
             require_tool_call=require_tool_call,
+            subflow_queues=(self.subflow_queues() or None),
         )
         self._snapshot = snapshot_from_tools(self._tools)
         self._capabilities = CapabilityManifest(

@@ -14,7 +14,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from composable_agents.typed import FlowLike
@@ -103,6 +103,7 @@ def _freeze_agent(
     cas: str,
     *,
     publish: bool = True,
+    queue: Optional[str] = None,
 ) -> dict[str, Any]:
     from composable_agents.agent import Tool, snapshot_from_tools
     from composable_agents.cas import LocalDirCAS, cas_from_url
@@ -141,7 +142,7 @@ def _freeze_agent(
     # strict=False so we can surface the prod gap ourselves rather than letting
     # ValidationError abort before we can attach a human-readable summary. We
     # still REFUSE to publish/record a blocking deployment below.
-    dep = deploy(node, snapshot, strict=False)
+    dep = deploy(node, snapshot, strict=False, queue=queue)
     bad = blocking(dep.diagnostics)
     if bad:
         return {"error": dep.prod_gap_summary()}
@@ -209,6 +210,7 @@ def main() -> int:
                     result.modules,
                     str(payload["cas"]),
                     publish=action == "freeze",
+                    queue=payload.get("flow_queue"),
                 )
             )
         except Exception as exc:  # noqa: BLE001 - serialize child failures for the parent.

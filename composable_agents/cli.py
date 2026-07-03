@@ -213,14 +213,16 @@ def _cmd_worker(args: argparse.Namespace, out: TextIO) -> int:
         from .ca.config import load_config
         from .ca.queues import resolve_queue_lane
 
-        try:
-            cfg = load_config(Path("."))
-            env_cfg = cfg.envs.get(args.env)
-            lanes = env_cfg.queues if env_cfg is not None else {}
-            default = env_cfg.task_queue if env_cfg is not None else args.queue
-        except Exception:
-            lanes, default = {}, args.queue
-        env["TEMPORAL_TASK_QUEUE"] = resolve_queue_lane(args.queue, lanes, default)
+        cfg = load_config(Path("."))
+        env_cfg = cfg.envs.get(args.env)
+        if env_cfg is None:
+            raise ValueError(
+                f"worker --queue lane resolution: unknown env {args.env!r}; "
+                f"configured envs: {sorted(cfg.envs)}"
+            )
+        env["TEMPORAL_TASK_QUEUE"] = resolve_queue_lane(
+            args.queue, env_cfg.queues, env_cfg.task_queue
+        )
     if args.health_port is not None:
         env["WORKER_HEALTH_PORT"] = str(args.health_port)
     settings = WorkerServeSettings.from_env(env)

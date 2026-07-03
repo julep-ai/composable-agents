@@ -9,9 +9,12 @@ import pytest
 
 from composable_agents import Agent, Shape, tool
 from composable_agents.ca.config import CaConfig, EnvConfig, load_config
-from composable_agents.ca.ledger import DeployRecord, upsert_records
+from composable_agents.ca.deploy import deploy_agents
+from composable_agents.ca.ledger import DeployRecord, read_ledger, upsert_records
+from composable_agents.ca.lint import lint_agents
 from composable_agents.ca.queues import queue_lane_diagnostics, resolve_queue_lane
 from composable_agents.ca.temporal_run import build_flow_start_args, run_on_env
+from composable_agents.execution.interpreter import _app_config
 from composable_agents.execution.harness import (
     AgentInput,
     FlowInput,
@@ -168,6 +171,109 @@ def test_queue_lanes_transitive_propagation_and_can_preservation() -> None:
     assert agent_can.subflow_queues == {"child": "foreground"}
 
 
+def test_agent_as_sub_queue_carrier_reaches_app_config() -> None:
+    @tool(effect="read", idempotent=True, name="carrier_tool")
+    def t(v: str) -> str:
+        return v
+
+    child = Agent("m", tools=[t], name="carrier_child")
+    parent = Agent("m", tools=[child.as_sub(queue="maintenance")], name="carrier_parent")
+
+    assert parent.subflow_queues() == {"carrier_child": "maintenance"}
+    node = parent.to_ir()
+    assert node.to_json()["subflowQueues"] == {"carrier_child": "maintenance"}
+    app_config = _app_config(node)
+    assert app_config is not None
+    assert app_config["subflowQueues"] == {"carrier_child": "maintenance"}
+    assert (
+        _resolve_child_queue(
+            app_config["subflowQueues"]["carrier_child"],
+            {"maintenance": "prod-maint"},
+        )
+        == "prod-maint"
+    )
+
+
+def test_ca_deploy_records_flow_queue_and_run_resolves_lane(tmp_path: Path) -> None:
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "agents.py").write_text(
+        "from composable_agents import flow\n"
+        "\n"
+        "@flow\n"
+        "def support_bot(ticket: str) -> str:\n"
+        "    return ticket\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.ca]\nsrc = ["pkg"]\n'
+        "[tool.ca.queue]\n"
+        'support_bot = "foreground"\n'
+        "[tool.ca.env.local.queues]\n"
+        'foreground = "local-fg"\n',
+        encoding="utf-8",
+    )
+
+    cfg = load_config(tmp_path)
+    assert cfg.flow_queues == {"support_bot": "foreground"}
+    assert cfg.envs["local"].queues == {"foreground": "local-fg"}
+
+    records = deploy_agents(cfg, ["support_bot"], "local", now_iso="2026-07-03T00:00:00Z")
+
+    assert records[0].queue == "foreground"
+    assert read_ledger(tmp_path, "local")["support_bot"].queue == "foreground"
+    assert build_flow_start_args(records[0], cfg.envs["local"], None).task_queue == "local-fg"
+
+
+def test_lint_env_selects_target_queue_map(
+    tmp_path: Path,
+) -> None:
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "agents.py").write_text(
+        "from composable_agents import Agent, tool\n"
+        "\n"
+        '@tool(effect="read", idempotent=True, name="lint_env_tool")\n'
+        "def child_tool(value: str) -> str:\n"
+        "    return value\n"
+        "\n"
+        'child = Agent("m", tools=[child_tool], name="lint_env_child")\n'
+        'parent = Agent("m", tools=[child.as_sub(queue="typo")], name="lint_env_parent")\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.ca]\nsrc = ["pkg"]\n'
+        "[tool.ca.env.prod.queues]\n"
+        'foreground = "prod-fg"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(tmp_path)
+
+    local_findings, local_code = lint_agents(
+        cfg,
+        ["lint_env_parent"],
+        fail_severity="error",
+        env_vars=cfg.envs["local"].vars,
+        queues=cfg.envs["local"].queues,
+        queue_env="local",
+    )
+    assert local_code == 0
+    assert [finding.code for finding in local_findings] == []
+
+    prod_findings, prod_code = lint_agents(
+        cfg,
+        ["lint_env_parent"],
+        fail_severity="error",
+        env_vars=cfg.envs["prod"].vars,
+        queues=cfg.envs["prod"].queues,
+        queue_env="prod",
+    )
+    assert prod_code == 1
+    assert [finding.code for finding in prod_findings] == ["QUEUE_UNKNOWN_LANE"]
+
+
 def test_worker_queue_cli_resolves_lanes_and_raw_strings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -203,6 +309,43 @@ def test_worker_queue_cli_resolves_lanes_and_raw_strings(
     )
     assert cli._cmd_worker(args, io.StringIO()) == 0
     assert captured[-1] == "raw-q"
+
+
+def test_worker_queue_unknown_env_is_loud(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import composable_agents.cli as cli
+
+    serve_mod = import_module("composable_agents.execution.serve")
+
+    (tmp_path / "ca.toml").write_text(
+        "[env.prod]\n"
+        'task_queue = "prod-default"\n'
+        "[env.prod.queues]\n"
+        'foreground = "prod-fg"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    captured: list[str] = []
+
+    async def fake_serve(settings: Any) -> None:
+        captured.append(settings.task_queue)
+
+    monkeypatch.setattr(serve_mod, "serve", fake_serve)
+    parser = cli._parser()
+
+    args = parser.parse_args(
+        ["worker", "--context-factory", "m:f", "--queue", "foreground", "--env", "prod"]
+    )
+    assert cli._cmd_worker(args, io.StringIO()) == 0
+    assert captured[-1] == "prod-fg"
+
+    args = parser.parse_args(
+        ["worker", "--context-factory", "m:f", "--queue", "foreground", "--env", "prd"]
+    )
+    with pytest.raises(ValueError, match="unknown env"):
+        cli._cmd_worker(args, io.StringIO())
 
 
 def test_queue_lane_diagnostics_for_agent_and_ir_subcontracts() -> None:

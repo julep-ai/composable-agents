@@ -28,6 +28,7 @@ def test_named_agent_split_cap_exposes_child_deployment_metadata() -> None:
     parent = Agent("m", tools=[child.as_sub(queue="c3-q")], name="c3_parent")
 
     assert parent.to_ir().to_json()["subflows"] == ["c3_child"]
+    assert parent.to_ir().to_json()["subflowQueues"] == {"c3_child": "c3-q"}
     assert parent.subflow_queues() == {"c3_child": "c3-q"}
     sc = parent.split_children()["c3_child"]
     assert sc.queue == "c3-q"
@@ -43,6 +44,7 @@ def test_queue_less_split_child_has_no_subflow_queue_metadata() -> None:
     parent = Agent("m", tools=[child.as_sub()], name="c3_no_queue_parent")
 
     assert parent.subflow_queues() == {}
+    assert "subflowQueues" not in parent.to_ir().to_json()
 
 
 def test_split_agent_local_run_uses_child_loop() -> None:

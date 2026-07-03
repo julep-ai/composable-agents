@@ -111,6 +111,7 @@ def freeze_agent(cfg: CaConfig, name: str, env: str, *, publish: bool = True) ->
             "src": cfg.src,
             "name": name,
             "cas": cas,
+            "flow_queue": cfg.flow_queues.get(name),
             # The env profile binds the dotctx yglu default env in the child;
             # freeze and freeze_check (status drift) use the same binding so a
             # var-dependent agent does not show phantom drift.

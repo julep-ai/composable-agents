@@ -307,23 +307,28 @@ def status(
 def lint(
     selector: str = typer.Argument("", help="Selection expression (default: all)."),
     exclude: str = typer.Option("", "--exclude", help="Exclude expression."),
+    env: str = typer.Option("local", "--env", help="Environment name (queue-lane target)."),
     fail_severity: _FailSeverity | None = typer.Option(  # noqa: B008
         None, "--fail-severity", help="error|warning|info (default: config)."
     ),
 ) -> None:
     """Lint selected agents (structural validation + severity gating)."""
     cfg = load_config(Path("."))
+    if env not in cfg.envs:
+        typer.echo(f"error: unknown env {env!r}", err=True)
+        raise typer.Exit(2)
     module = build_module(cfg)
     names = [a.name for a in select(module, selector, exclude=exclude)]
     floor = fail_severity.value if fail_severity is not None else cfg.fail_severity
-    # lint has no --env; the implicit local profile is the deterministic default.
+    # --env defaults to local, preserving the deterministic default target.
+    env_cfg = cfg.envs[env]
     findings, code = lint_agents(
         cfg,
         names,
         fail_severity=floor,
-        env_vars=cfg.envs["local"].vars,
-        queues=cfg.envs["local"].queues,
-        queue_env="local",
+        env_vars=env_cfg.vars,
+        queues=env_cfg.queues,
+        queue_env=env,
     )
     for f in findings:
         typer.echo(f"{f.severity.upper():7} {f.agent}: {f.code} — {f.message}")
