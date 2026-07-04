@@ -27,6 +27,7 @@ from composable_agents.dotctx import load_dotctx
 from composable_agents.dotctx_evals import (
     MockToolConfig,
     Sample,
+    extract_llm_content,
     stop_after_turns,
     stop_when_non_tool,
     stop_when_terminal_tool,
@@ -463,6 +464,37 @@ def test_eval_output_is_dict_with_memmcp_metadata() -> None:
     assert out["trace"] == [1]
     assert out._tool_calls == [{"id": "c1", "name": "t", "args": {}}]
     assert out._rounds == 2
+    assert getattr(out, "content", None) is None
+
+
+def test_tool_loop_empty_args_normalized_to_dict() -> None:
+    """mem-mcp parity: tool-call ``args`` is ALWAYS a dict, so a scorer doing
+    ``call.get("args", {}).get(...)`` never raises on empty/malformed arguments."""
+    rich = load_rich_dotctx(str(FIXTURES / "execute_eval.ctx"), env={})
+    sample = Sample(
+        name="empty_args",
+        input={"task": "store"},
+        expected=None,
+        mock_tools={"record_memory": {"ok": True}},
+        stop_on=stop_after_turns(3),
+    )
+    out = run(_run_tool_loop(rich, sample, ToolLoopFake("record_memory", "")))
+    assert out._tool_calls
+    assert all(isinstance(call["args"], dict) for call in out._tool_calls)
+    # The real mem-mcp scorer access pattern must not raise on empty args.
+    assert out._tool_calls[0]["args"].get("content") is None
+
+
+def test_extract_llm_content_reaches_tool_loop_final_text() -> None:
+    """mem-mcp OutputWithMetadata parity: extract_llm_content(output) returns the
+    tool loop's final assistant text via the ``__dict__['output']`` hop (not None),
+    while ``getattr(output, "content")`` stays None as it does in mem-mcp."""
+    out = EvalOutput(
+        {"status": "done", "output": {"content": "final text"}, "trace": []},
+        [{"id": "c1", "name": "t", "args": {}}],
+        2,
+    )
+    assert extract_llm_content(out) == "final text"
     assert getattr(out, "content", None) is None
 
 

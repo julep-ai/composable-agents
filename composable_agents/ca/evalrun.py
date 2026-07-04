@@ -105,6 +105,34 @@ class EvalOutput(dict[str, Any]):
         super().__init__(output)
         self._tool_calls = tool_calls
         self._rounds = rounds
+        # mem-mcp OutputWithMetadata parity: extract_llm_content()/scorers that
+        # read the final assistant text walk ``__dict__["output"]`` (llm_utils
+        # extract_llm_content). The terminal harness dict nests the final reply
+        # at output["output"] (e.g. {"content": ...}); expose it as the ``output``
+        # attribute so extract_llm_content(EvalOutput) returns that text instead
+        # of None. ``getattr(output, "content")`` stays None, matching mem-mcp
+        # (a litellm response object has no top-level ``.content`` attribute).
+        self.output = output.get("output") if isinstance(output, Mapping) else None
+
+
+def _normalize_tool_args(value: Any) -> Any:
+    """mem-mcp parity: an agent-loop tool call's ``args`` is ALWAYS a dict.
+
+    mem-mcp's ``_extract_tool_calls_from_response`` yields ``{"_raw": args_str}``
+    when the provider arguments don't JSON-decode and defaults missing arguments
+    to ``{}``. Native tool-call parsing here (execution/llm._parse_tool_call_arguments)
+    instead returns the raw string on a decode failure and ``None`` for absent
+    arguments, so a ported scorer doing ``call.get("args", {}).get(...)`` would hit
+    ``''`` / ``None`` and raise AttributeError, aborting the whole eval as a setup
+    error (exit 4). Coerce to the shape mem-mcp guarantees.
+    """
+    if isinstance(value, dict):
+        return value
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        return {"_raw": value}
+    return value
 
 
 def _provider_tool_defs(
@@ -393,7 +421,7 @@ async def _run_tool_loop(
                         {
                             "id": tc.get("id") or "",
                             "name": tc.get("tool") or "",
-                            "args": tc.get("input"),
+                            "args": _normalize_tool_args(tc.get("input")),
                         }
                     )
         else:
