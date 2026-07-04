@@ -422,6 +422,8 @@ async def run_eval(
     *,
     env_vars: Optional[Mapping[str, str]] = None,
     limit: Optional[int] = None,
+    tags: Optional[Sequence[str]] = None,
+    sample_names: Optional[Sequence[str]] = None,
     acompletion: Optional[AnyCompletion] = None,
     registry: Registry = DEFAULT_REGISTRY,
 ) -> EvalReport:
@@ -441,12 +443,40 @@ async def run_eval(
     reasoner = rich.reasoner
     resolved = _resolve_acompletion(acompletion)
 
+    filtered = bool(tags) or bool(sample_names)
     try:
-        raw = module.sample(-1 if limit is None else limit)
+        raw = module.sample(-1 if (limit is None or filtered) else limit)
         loaded_samples = await raw if inspect.isawaitable(raw) else raw
     except Exception as exc:  # noqa: BLE001 - user eval.py sample() code -> setup error (exit 4)
         raise ValueError(f"eval sample() failed: {exc!r}") from exc
     samples = _validate_samples(loaded_samples)
+    if tags:
+        # mem-mcp semantics (run_prompt_eval.py): any-match set intersection.
+        tag_set = set(tags)
+        samples = [s for s in samples if tag_set.intersection(s.tags or ())]
+    if sample_names:
+        # Checked AFTER tag filtering, matching mem-mcp (run_prompt_eval.py):
+        # a name excluded by --tag reports as missing there too.
+        name_set = set(sample_names)
+        selected = [s for s in samples if s.name in name_set]
+        missing = sorted(name_set - {s.name for s in selected})
+        if missing:
+            where = f"{ctx!r} (after --tag filtering)" if tags else repr(ctx)
+            raise ValueError(
+                f"sample names not found in {where}: {', '.join(missing)} "
+                "(names come from Sample(name=...))"
+            )
+        samples = selected
+    if filtered:
+        if limit is not None:
+            samples = samples[: max(0, limit)]
+        if not samples:
+            # Covers both no-tag-match and --limit 0: never emit a silent
+            # zero-sample report (exit 2) when the user asked for a subset.
+            raise ValueError(
+                f"no samples in {ctx!r} match --tag/--sample-name/--limit "
+                "(tag filtering is any-match on Sample.tags)"
+            )
     sids = _unique_sample_ids(samples)
 
     is_tool_loop = bool(reasoner.tools)
@@ -485,9 +515,20 @@ def run_eval_sync(
     *,
     env_vars: Optional[Mapping[str, str]] = None,
     limit: Optional[int] = None,
+    tags: Optional[Sequence[str]] = None,
+    sample_names: Optional[Sequence[str]] = None,
     acompletion: Optional[AnyCompletion] = None,
 ) -> EvalReport:
-    return asyncio.run(run_eval(ctx_path, env_vars=env_vars, limit=limit, acompletion=acompletion))
+    return asyncio.run(
+        run_eval(
+            ctx_path,
+            env_vars=env_vars,
+            limit=limit,
+            tags=tags,
+            sample_names=sample_names,
+            acompletion=acompletion,
+        )
+    )
 
 
 def diff_reports(

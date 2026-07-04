@@ -179,6 +179,26 @@ def score(_input: dict[str, Any], output: Any, expected: Any) -> Any:
 '''
 
 
+TAGGED_EVAL = '''\
+from typing import Any
+
+from dotctx.eval_types import Sample
+
+
+def sample(limit: int = -1) -> list[Sample]:
+    samples = [
+        Sample(name="a", input={"task": "a"}, expected=None, tags=["prod"]),
+        Sample(name="b", input={"task": "b"}, expected=None, tags=["smoke"]),
+        Sample(name="c", input={"task": "c"}, expected=None, tags=["prod", "smoke"]),
+    ]
+    return samples if limit is None or limit < 0 else samples[:limit]
+
+
+def score(_input: dict[str, Any], output: Any, expected: Any) -> float:
+    return 1.0
+'''
+
+
 def _good_summary_json() -> str:
     return json.dumps(
         {
@@ -353,6 +373,70 @@ def test_sample_score_json_backcompat_without_metrics() -> None:
     s = SampleScore.from_json({"id": "a", "score": 1.0, "passed": True})
     assert s.metrics is None
     assert s.to_json() == {"id": "a", "score": 1.0, "passed": True}
+
+
+def test_tag_filter_any_match(tmp_path: Path) -> None:
+    ctx = _write_eval_ctx(tmp_path, TAGGED_EVAL)
+    report = run(run_eval(str(ctx), acompletion=SingleShotFake("x"), tags=["prod"]))
+    assert [s.id for s in report.scores] == ["a", "c"]
+    assert report.samples == 2
+
+
+def test_tag_filter_applies_before_limit(tmp_path: Path) -> None:
+    # A naive sample(limit=1) would only see "a" (tagged prod) and return
+    # nothing for smoke; filtering must happen on sample(-1) first.
+    ctx = _write_eval_ctx(tmp_path, TAGGED_EVAL)
+    report = run(
+        run_eval(str(ctx), acompletion=SingleShotFake("x"), tags=["smoke"], limit=1)
+    )
+    assert [s.id for s in report.scores] == ["b"]
+
+
+def test_sample_name_filter_and_missing_name(tmp_path: Path) -> None:
+    ctx = _write_eval_ctx(tmp_path, TAGGED_EVAL)
+    report = run(run_eval(str(ctx), acompletion=SingleShotFake("x"), sample_names=["b"]))
+    assert [s.id for s in report.scores] == ["b"]
+    with pytest.raises(ValueError, match="zzz"):
+        run(run_eval(str(ctx), acompletion=SingleShotFake("x"), sample_names=["zzz"]))
+
+
+def test_no_matching_tag_is_setup_error(tmp_path: Path) -> None:
+    ctx = _write_eval_ctx(tmp_path, TAGGED_EVAL)
+    with pytest.raises(ValueError, match="no samples"):
+        run(run_eval(str(ctx), acompletion=SingleShotFake("x"), tags=["nope"]))
+    # --limit 0 on a filtered run must not slip through as a zero-sample report
+    with pytest.raises(ValueError, match="no samples"):
+        run(run_eval(str(ctx), acompletion=SingleShotFake("x"), tags=["prod"], limit=0))
+
+
+def test_eval_cmd_passes_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typer.testing import CliRunner
+
+    import composable_agents.ca.evalrun as evalrun
+
+    captured: dict[str, Any] = {}
+
+    def fake_run_eval_sync(ctx_path: str, **kwargs: Any) -> EvalReport:
+        captured.update(kwargs, ctx_path=ctx_path)
+        return EvalReport(
+            ctx="x",
+            model="m",
+            samples=0,
+            scores=(),
+            mean=1.0,
+            threshold=0.5,
+            passed=True,
+        )
+
+    monkeypatch.setattr(evalrun, "run_eval_sync", fake_run_eval_sync)
+    monkeypatch.setattr(cli, "_eval_env_vars", lambda env: {})
+    result = CliRunner().invoke(
+        cli.app,
+        ["eval", "some.ctx", "--tag", "prod", "--tag", "smoke", "--sample-name", "a"],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["tags"] == ["prod", "smoke"]
+    assert captured["sample_names"] == ["a"]
 
 
 def test_tool_loop_scores_trace_derived_output() -> None:
