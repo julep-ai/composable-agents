@@ -75,6 +75,28 @@ class EvalReport:
         )
 
 
+class EvalOutput(dict[str, Any]):
+    """Terminal agent-loop dict + mem-mcp ``OutputWithMetadata`` metadata.
+
+    Real mem-mcp agent-loop scorers read ``getattr(output, "_tool_calls", [])``
+    and ``getattr(output, "_rounds", None)`` (record/execute, slack/bootstrap,
+    threads/merge_evaluator, classification_reviewer, linear/ingest). On a
+    plain dict those getattr defaults fire and the suite silently scores as
+    "no tools called". Subclassing dict keeps every dict consumer
+    (``isinstance(output, dict)``, ``.get``, ``[...]``, ``str()``) unchanged.
+    """
+
+    def __init__(
+        self,
+        output: Mapping[str, Any],
+        tool_calls: list[dict[str, Any]],
+        rounds: int,
+    ) -> None:
+        super().__init__(output)
+        self._tool_calls = tool_calls
+        self._rounds = rounds
+
+
 def _provider_tool_defs(
     expected: Mapping[str, dict[str, Any]],
     descriptions: Mapping[str, str],
@@ -260,6 +282,12 @@ async def _run_tool_loop(
     # This round's provider tool_call ids, positionally aligned with the loop's
     # call_index, so each tool observation attaches to the right assistant call.
     round_call_ids: list[Optional[str]] = []
+    # mem-mcp OutputWithMetadata parity: every native tool call the MODEL EMITS,
+    # in the {"id", "name", "args"} shape real mem-mcp scorers consume. Recorded
+    # at emission (pre-execution), matching mem-mcp exactly — its runner parses
+    # tool_calls out of the LLM response, so a denied/failed call appears there
+    # too; scorers that care about execution read the trace/error instead.
+    collected_calls: list[dict[str, Any]] = []
 
     async def call_tool(
         name: str,
@@ -314,6 +342,15 @@ async def _run_tool_loop(
             round_call_ids = [
                 (tc.get("id") if isinstance(tc, dict) else None) for tc in tool_calls
             ]
+            for tc in tool_calls:
+                if isinstance(tc, dict):
+                    collected_calls.append(
+                        {
+                            "id": tc.get("id") or "",
+                            "name": tc.get("tool") or "",
+                            "args": tc.get("input"),
+                        }
+                    )
         else:
             round_call_ids = []
             # A content-only (natural-language) final reply: normalize to the
@@ -324,7 +361,7 @@ async def _run_tool_loop(
                 return {"output": {"content": reply}}
         return reply
 
-    return await drive_agent_loop(
+    result = await drive_agent_loop(
         input=sample.input,
         cfg=cfg,
         invoke_controller=invoke_controller,
@@ -332,6 +369,7 @@ async def _run_tool_loop(
         granted=granted,
         contracts=None,
     )
+    return EvalOutput(result, collected_calls, turn_index)
 
 
 async def run_eval(
@@ -436,6 +474,7 @@ def diff_reports(
 
 
 __all__ = [
+    "EvalOutput",
     "EvalReport",
     "SampleScore",
     "diff_reports",

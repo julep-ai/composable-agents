@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -13,6 +14,7 @@ pytest.importorskip("yglu")  # the vendored .ctx settings carry `!?` env express
 
 from composable_agents.ca import cli
 from composable_agents.ca.evalrun import (
+    EvalOutput,
     EvalReport,
     _provider_tool_defs,
     _run_tool_loop,
@@ -98,6 +100,52 @@ def _write_eval_ctx(tmp_path: Path, eval_py: str) -> Path:
     )
     (ctx / "eval.py").write_text(eval_py, encoding="utf-8")
     return ctx
+
+
+def _write_tool_eval_ctx(tmp_path: Path, eval_py: str) -> Path:
+    """Copy the vendored tool-loop fixture, swapping in a custom eval.py."""
+    ctx = tmp_path / "tool_case.ctx"
+    shutil.copytree(FIXTURES / "execute_eval.ctx", ctx)
+    (ctx / "eval.py").write_text(eval_py, encoding="utf-8")
+    return ctx
+
+
+# Scores exactly the way real mem-mcp agent-loop suites do (record/execute,
+# slack/bootstrap, ...): getattr(output, "_tool_calls", []) + "_rounds".
+META_SCORER_EVAL = '''\
+from typing import Any
+
+from dotctx.eval_types import Sample, stop_after_turns
+
+
+def sample(limit: int = -1) -> list[Sample]:
+    samples = [
+        Sample(
+            name="meta_ok",
+            input={"task": "store a memory"},
+            expected=None,
+            mock_tools={"record_memory": {"ok": True}},
+            stop_on=stop_after_turns(4),
+        ),
+    ]
+    return samples if limit is None or limit < 0 else samples[:limit]
+
+
+def score(_input: dict[str, Any], output: Any, expected: Any) -> float:
+    calls = getattr(output, "_tool_calls", [])
+    rounds = getattr(output, "_rounds", None)
+    if not calls or not isinstance(rounds, int) or rounds < 1:
+        return 0.0
+    if any(set(c) != {"id", "name", "args"} for c in calls):
+        return 0.0
+    if [c["name"] for c in calls] != ["record_memory"]:
+        return 0.0
+    if calls[0]["args"] != {"content": "hi"}:
+        return 0.0
+    if not isinstance(output, dict) or getattr(output, "content", None) is not None:
+        return 0.0
+    return 1.0
+'''
 
 
 def _good_summary_json() -> str:
@@ -258,6 +306,26 @@ def test_tool_loop_scores_trace_derived_output() -> None:
     assert report.scores[0].id == "records_ok"
     assert report.scores[0].score == 1.0
     assert report.scores[0].passed is True
+
+
+def test_eval_output_is_dict_with_memmcp_metadata() -> None:
+    out = EvalOutput({"trace": [1]}, [{"id": "c1", "name": "t", "args": {}}], 2)
+    assert isinstance(out, dict)
+    assert out.get("trace") == [1]
+    assert out["trace"] == [1]
+    assert out._tool_calls == [{"id": "c1", "name": "t", "args": {}}]
+    assert out._rounds == 2
+    assert getattr(out, "content", None) is None
+
+
+def test_tool_loop_output_carries_memmcp_metadata(tmp_path: Path) -> None:
+    ctx = _write_tool_eval_ctx(tmp_path, META_SCORER_EVAL)
+    report = run(
+        run_eval(str(ctx), acompletion=ToolLoopFake("record_memory", '{"content": "hi"}'))
+    )
+    assert report.scores[0].id == "meta_ok"
+    assert report.scores[0].score == 1.0
+    assert report.passed is True
 
 
 def test_tool_loop_unmocked_tool_scored_failure() -> None:
