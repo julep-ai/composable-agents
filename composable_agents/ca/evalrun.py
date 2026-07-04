@@ -32,13 +32,23 @@ class SampleScore:
     id: str
     score: float
     passed: bool
+    metrics: Optional[dict[str, Any]] = None
 
     def to_json(self) -> dict[str, Any]:
-        return {"id": self.id, "score": self.score, "passed": self.passed}
+        d: dict[str, Any] = {"id": self.id, "score": self.score, "passed": self.passed}
+        if self.metrics:
+            d["metrics"] = self.metrics
+        return d
 
     @staticmethod
     def from_json(d: dict[str, Any]) -> "SampleScore":
-        return SampleScore(id=str(d["id"]), score=float(d["score"]), passed=bool(d["passed"]))
+        m = d.get("metrics")
+        return SampleScore(
+            id=str(d["id"]),
+            score=float(d["score"]),
+            passed=bool(d["passed"]),
+            metrics=dict(m) if isinstance(m, dict) else None,
+        )
 
 
 @dataclass(frozen=True)
@@ -152,6 +162,41 @@ def _unique_sample_ids(samples: Sequence[Sample]) -> list[str]:
             counts[base] = n + 1
             ids.append(f"{base}#{counts[base]}")
     return ids
+
+
+def _coerce_score(value: Any) -> tuple[float, dict[str, Any]]:
+    """The mem-mcp score() contract: a 0..1 number, or a (number, metrics_dict)
+    2-tuple (record/plan and record/execute return metrics for reporters).
+
+    Anything else — e.g. propose_template's dict return — is invalid in
+    mem-mcp's runner too; here it surfaces as a setup error (exit 4) instead
+    of mem-mcp's silent per-sample 0.0-with-error."""
+    metrics: dict[str, Any] = {}
+    if isinstance(value, tuple):
+        if len(value) != 2:
+            raise ValueError(
+                f"score returned a tuple; expected (score, metrics) with 2 elements, got {len(value)}"
+            )
+        value, metrics = value
+        if not isinstance(metrics, dict):
+            raise ValueError(
+                "score returned (score, metrics) but metrics must be a dict, "
+                f"got {type(metrics).__name__}"
+            )
+        try:
+            json.dumps(metrics)
+        except (TypeError, ValueError) as exc:
+            # Catch non-serializable metrics HERE (setup error, exit 4) so
+            # `ca eval --json` doesn't crash at report-write time (exit 1).
+            raise ValueError(f"score metrics must be JSON-serializable: {exc}") from exc
+    if not isinstance(value, (int, float)):
+        # bool passes on purpose: mem-mcp's runner accepts it (bool is an int
+        # subclass there too), so True -> 1.0 is parity, not an accident.
+        raise ValueError(f"score must be a number, got {type(value).__name__}")
+    score = float(value)
+    if not 0.0 <= score <= 1.0:
+        raise ValueError(f"score must be 0.0-1.0, got {score}")
+    return score, metrics
 
 
 def _resolve_mock(
@@ -416,11 +461,11 @@ async def run_eval(
             try:
                 raw_score = module.score(sample.input, output, sample.expected)
                 value = await raw_score if inspect.isawaitable(raw_score) else raw_score
-                s = float(value)
+                s, metrics = _coerce_score(value)
             except Exception as exc:  # noqa: BLE001 - user eval.py score() code -> setup error (exit 4)
                 raise ValueError(f"eval score() failed: {exc!r}") from exc
             sid = sids[index]
-            return SampleScore(id=sid, score=s, passed=s >= threshold)
+            return SampleScore(id=sid, score=s, passed=s >= threshold, metrics=metrics or None)
 
     results = await asyncio.gather(*(score_one(i, s) for i, s in enumerate(samples)))
     mean = sum(r.score for r in results) / len(results) if results else 0.0

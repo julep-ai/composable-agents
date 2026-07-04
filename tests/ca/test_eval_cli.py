@@ -16,6 +16,7 @@ from composable_agents.ca import cli
 from composable_agents.ca.evalrun import (
     EvalOutput,
     EvalReport,
+    SampleScore,
     _provider_tool_defs,
     _run_tool_loop,
     diff_reports,
@@ -145,6 +146,36 @@ def score(_input: dict[str, Any], output: Any, expected: Any) -> float:
     if not isinstance(output, dict) or getattr(output, "content", None) is not None:
         return 0.0
     return 1.0
+'''
+
+
+TUPLE_SCORER_EVAL = '''\
+from typing import Any
+
+from dotctx.eval_types import Sample
+
+
+def sample(limit: int = -1) -> list[Sample]:
+    return [Sample(name="t", input={"task": "x"}, expected=None)]
+
+
+def score(_input: dict[str, Any], output: Any, expected: Any) -> Any:
+    return 0.75, {"keywords": 3}
+'''
+
+
+BAD_SCORER_TEMPLATE = '''\
+from typing import Any
+
+from dotctx.eval_types import Sample
+
+
+def sample(limit: int = -1) -> list[Sample]:
+    return [Sample(name="t", input={{"task": "x"}}, expected=None)]
+
+
+def score(_input: dict[str, Any], output: Any, expected: Any) -> Any:
+    return {ret}
 '''
 
 
@@ -289,6 +320,39 @@ def test_single_shot_below_threshold() -> None:
     assert [score.score for score in report.scores] == [0.0, 0.0]
     assert report.mean == 0.0
     assert report.passed is False
+
+
+def test_score_tuple_carries_metrics(tmp_path: Path) -> None:
+    ctx = _write_eval_ctx(tmp_path, TUPLE_SCORER_EVAL)
+    report = run(run_eval(str(ctx), acompletion=SingleShotFake("whatever")))
+    s = report.scores[0]
+    assert (s.score, s.passed, s.metrics) == (0.75, True, {"keywords": 3})
+    data = report.to_json()
+    assert data["scores"][0]["metrics"] == {"keywords": 3}
+    assert EvalReport.from_json(data).to_json() == data
+
+
+@pytest.mark.parametrize(
+    "ret",
+    [
+        "(0.5,)",  # 1-tuple
+        "(0.5, 3)",  # metrics not a dict
+        '"high"',  # not a number
+        "1.5",  # out of 0..1 range
+        '{"score": 1.0, "reason": "dict returns are not the contract"}',
+        '(0.5, {"seen": {"a", "b"}})',  # metrics not JSON-serializable
+    ],
+)
+def test_bad_score_returns_are_setup_errors(tmp_path: Path, ret: str) -> None:
+    ctx = _write_eval_ctx(tmp_path, BAD_SCORER_TEMPLATE.format(ret=ret))
+    with pytest.raises(ValueError, match=r"eval score\(\) failed"):
+        run(run_eval(str(ctx), acompletion=SingleShotFake("whatever")))
+
+
+def test_sample_score_json_backcompat_without_metrics() -> None:
+    s = SampleScore.from_json({"id": "a", "score": 1.0, "passed": True})
+    assert s.metrics is None
+    assert s.to_json() == {"id": "a", "score": 1.0, "passed": True}
 
 
 def test_tool_loop_scores_trace_derived_output() -> None:
